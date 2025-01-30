@@ -2,6 +2,7 @@ const express = require("express");
 const route = express.Router();
 const multer = require('multer');
 const path = require('path');
+var db = require('../db');
 
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -16,7 +17,7 @@ const upload = multer({ storage: storage });
 
 // ดึงโครงการทั้งหมด
 route.get('/', (req, res) => {
-    const db = req.db;
+    // const db = req.db;
     const query = 'SELECT * FROM donationproject';
 
     db.query(query, (err, results) => {
@@ -30,7 +31,7 @@ route.get('/', (req, res) => {
 });
 
 route.get('/donatedetail/:id', (req, res) => {
-    const db = req.db;
+    // const db = req.db;
     const projectId = req.params.id;
 
     const query = 'SELECT * FROM donationproject WHERE project_id = ?';
@@ -59,7 +60,7 @@ route.post('/donateRequest', upload.single('image'), (req, res) => {
         return res.status(400).json({ error: 'Image is required' });
     }
 
-    const db = req.db;
+    // const db = req.db;
 
     const query = `
     INSERT INTO donationproject 
@@ -96,7 +97,7 @@ route.post('/donateRequest', upload.single('image'), (req, res) => {
 route.delete('/donate/:id', (req, res) => {
     const projectId = req.params.id;
     const currentDate = new Date();
-    const db = req.db;
+    // const db = req.db;
 
     if (!projectId) {
         return res.status(400).json({ error: 'Project ID is required' });

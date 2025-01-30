@@ -3,9 +3,10 @@ var express = require('express');
 var path = require('path');
 var cookieParser = require('cookie-parser');
 var logger = require('morgan');
-
+var QRcode = require('qrcode');
+var generatePayload = require('promptpay-qr');
 var app = express();
-
+var mysql = require('mysql2');
 var bodyParser = require('body-parser');
 var cors = require('cors');
 var passport = require('passport');
@@ -27,11 +28,12 @@ app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cors({
-  origin: 'http://localhost:3003', // URL ของ Frontend
+  origin: 'http://localhost:3002', // URL ของ Frontend
   credentials: true, // อนุญาตการส่ง cookies
 }));
 // app.use(cors());
 app.use('/img', express.static('img'));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 app.use(session({
   secret: process.env.SESSION_SECRET,
@@ -41,12 +43,10 @@ app.use(session({
     secure: false,
     httpOnly: true,
     // หากใช้ HTTPS ให้เปลี่ยนเป็น true
-  }  
+  }
 }));
 
 // console.log('SESSION_SECRET:', process.env.SESSION_SECRET);
-
-
 
 app.use(passport.initialize());
 app.use(passport.session());
@@ -61,10 +61,16 @@ var aboutRouter = require('./routes/about');
 var registerRouter = require('./routes/register');
 // var alumniRouter = require('./routes/alumni');
 
+var DonateRoute = require('./Routes/donate');
+var SouvenirRoute =  require('./Routes/souvenir');
+
 app.use('/api', indexRouter);
 app.use('/users', usersRouter);
+// app.use('/users/profile', usersRouter);
 app.use('/add', registerRouter);
 app.use('/show', aboutRouter);
+app.use('/donate', DonateRoute);
+app.use('/souvenir', SouvenirRoute);
 // app.use('/user', alumniRouter);
 
 // catch 404 and forward to error handler

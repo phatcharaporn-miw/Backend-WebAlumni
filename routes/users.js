@@ -26,11 +26,15 @@ router.get('/profile', LoggedIn, (req, res) => {
            profiles.line,
            profiles.studentId,
            profiles.graduation_year,
-           degree.degree_id
+           degree.degree_id,
+           alumni.major_id,
+           major.major_name
     FROM users
     JOIN profiles ON users.user_id = profiles.user_id
     LEFT JOIN user_degree ON users.user_id = user_degree.user_id
     LEFT JOIN degree ON user_degree.degree_id = degree.degree_id
+    LEFT JOIN alumni ON users.user_id = alumni.user_id
+    LEFT JOIN major ON alumni.major_id = major.major_id
     WHERE users.user_id = ?
   `;
 
@@ -40,11 +44,13 @@ router.get('/profile', LoggedIn, (req, res) => {
       return res.status(500).json({ success: false, message: 'Database error' });
     }
 
-    if (results.length > 0) {
-    const userProfile = results[0];
+    if (results.length > 0) { //ในตัวแปร results มีข้อมูลหรือไม่
+    const userProfile = results[0]; //ดึงข้อมูลของผู้ใช้คนแรกจากผลลัพธ์
 
 // ดึงข้อมูล degree_id ทั้งหมดจากผลลัพธ์
 const degrees = results.filter(row => row.degree_id !== null).map(row => row.degree_id);
+//filter กรองข้อมูลจาก results เลือกแถวที่ degree_id ไม่เป็น null
+//ฟังก์ชัน map จะดึงแค่ค่าของ degree_id จากแถวที่เหลือ
     res.json({
       success: true,
       user: {
@@ -62,16 +68,28 @@ const degrees = results.filter(row => row.degree_id !== null).map(row => row.deg
         profilePicture: `http://localhost:3001/${userProfile.image_path}`,
         role: userProfile.role_id,
         degrees: degrees,
+        major: userProfile.major_name,
       },
     });
   } else {
     res.status(404).json({ success: false, message: 'ไม่พบผู้ใช้'});
   }
-
     
   });
 });
 
+router.get('/profile/major', async (req, res) => {
+  try {
+      const [rows] = await db.promise().query('SELECT major_id, major_name  FROM major');
+      if (rows.length === 0) {
+          return res.status(404).json({ message: "ไม่มีข้อมูลสาขาในระบบ" });
+      }
+      res.status(200).json(rows);
+  } catch (error) {
+      console.error('Error fetching majors:', error);
+      res.status(500).json({ message: 'เกิดข้อผิดพลาดในการดึงข้อมูลสาขา' });
+  }
+});
 
 
 

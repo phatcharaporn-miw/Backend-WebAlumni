@@ -58,8 +58,6 @@ router.post('/login', (req, res) => {
   });
 });
 
-
-
 //เอาไว้เช็คการ hash password
 // const password = "12345";
 // bcrypt.hash(password, 10, (err, hash) => {

@@ -2,6 +2,7 @@ const express = require("express");
 const route = express.Router();
 const multer = require('multer');
 const path = require('path');
+var db = require('../db');
 
 // ตั้งค่าการจัดเก็บไฟล์
 const storage = multer.diskStorage({
@@ -19,7 +20,7 @@ const upload = multer({ storage });
 
 // ดึงข้อมูลสินค้าทั้งหมด
 route.get('/', (req, res) => {
-    const db = req.db; // เชื่อมต่อฐานข้อมูลผ่าน middleware
+    // const db = req.db; // เชื่อมต่อฐานข้อมูลผ่าน middleware
 
     const query = 'SELECT * FROM products';
 
@@ -33,7 +34,7 @@ route.get('/', (req, res) => {
     });
 });
 route.get('/souvenirDetail/:id', (req, res) => {
-    const db = req.db;
+    // const db = req.db;
     const productId = req.params.id;
 
     const query = 'SELECT * FROM products WHERE product_id = ?';

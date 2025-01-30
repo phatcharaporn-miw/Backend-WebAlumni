@@ -65,15 +65,19 @@ router.post('/register', upload.single('image_path'), async (req, res) => {
         const queryAlumni = 'INSERT INTO alumni (user_id, major_id) VALUES (?, ?)';
         await db.promise().query(queryAlumni, [user_id, major]);
 
-        // ตรวจสอบและเพิ่มข้อมูล degree
-        if (Array.isArray(degree) && degree.length > 0) {
+         // ตรวจสอบและเพิ่มข้อมูล degree
+         if (Array.isArray(degree) && degree.length > 0) {
             const queryDegree = 'INSERT INTO user_degree (user_id, degree_id) VALUES ?';
+            //map เพื่อแปลงข้อมูลในอาร์เรย์ degree เป็น array of array
             const degreeData = degree.map(degreeId => [user_id, degreeId]);
-
+            
             await db.promise().query(queryDegree, [degreeData]); 
+            console.log('Degree data for SQL:', degreeData);
         } else {
             console.log('No degree selected or invalid degree array');
+            
         }
+
 
         return res.status(201).json({ message: 'ลงทะเบียนสำเร็จ' });
     } catch (err) {
@@ -83,7 +87,6 @@ router.post('/register', upload.single('image_path'), async (req, res) => {
    
     });
     
-
 //ดึงข้อมูลสาขามาแสดง
 router.get('/major', async (req, res) => {
     try {
@@ -97,8 +100,6 @@ router.get('/major', async (req, res) => {
         res.status(500).json({ message: 'เกิดข้อผิดพลาดในการดึงข้อมูลสาขา' });
     }
 });
-
-
 
 
 module.exports = router;
