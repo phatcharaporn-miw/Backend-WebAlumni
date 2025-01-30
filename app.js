@@ -6,7 +6,6 @@ var logger = require('morgan');
 var QRcode = require('qrcode');
 var generatePayload = require('promptpay-qr');
 var app = express();
-var mysql = require('mysql2');
 var bodyParser = require('body-parser');
 var cors = require('cors');
 var passport = require('passport');
@@ -25,6 +24,7 @@ app.set('view engine', 'ejs');
 app.use(logger('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+app.use(bodyParser.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cors({
@@ -47,6 +47,7 @@ app.use(session({
 }));
 
 // console.log('SESSION_SECRET:', process.env.SESSION_SECRET);
+
 
 app.use(passport.initialize());
 app.use(passport.session());
@@ -72,6 +73,9 @@ app.use('/show', aboutRouter);
 app.use('/donate', DonateRoute);
 app.use('/souvenir', SouvenirRoute);
 // app.use('/user', alumniRouter);
+app.use('/test', testRoute);
+app.use('/donate', DonateRoute);
+app.use('/souvenir', SouvenirRoute);
 
 // catch 404 and forward to error handler
 app.use(function(req, res, next) {
