@@ -73,7 +73,6 @@ app.use('/show', aboutRouter);
 app.use('/donate', DonateRoute);
 app.use('/souvenir', SouvenirRoute);
 // app.use('/user', alumniRouter);
-app.use('/test', testRoute);
 app.use('/donate', DonateRoute);
 app.use('/souvenir', SouvenirRoute);
 
