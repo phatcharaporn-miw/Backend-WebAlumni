@@ -2,6 +2,7 @@ var express = require('express');
 var router = express.Router();
 var db = require('../db');
 var { LoggedIn, checkRole } = require('../middlewares/auth');
+var bcrypt = require('bcrypt');
 
 router.get('/profile', LoggedIn, (req, res) => {
   // console.log(req.session); 
@@ -91,6 +92,85 @@ router.get('/profile/major', async (req, res) => {
   }
 });
 
+//ส่วนของการแก้ไขข้อมูลส่วนตัว
+router.post('/edit-profile',(req, res) =>{
+  console.log('ข้อมูลที่ได้รับจาก Frontend:', req.body);
+  const { password, email, full_name, nick_name, title, birthday, address, phone, line,studentId, graduation_year, degree, self_description} = req.body;
+  //const userId = req.session.user?.id; 
+  const userId = req.session.user.id || null;
 
+  if (!userId) {
+    return res.status(400).json({message: "ไมพบไอดีของผู้ใช้งานคนนี้"})
+  }
+
+  // อัปเดตข้อมูลผู้ใช้
+  let sql = `
+  UPDATE profiles 
+  SET email=?, full_name=?, nick_name=?, title=?, birthday=?, address=?, phone=?, line=?, studentId=?, graduation_year=?, self_description=?
+  WHERE user_id=?`;
+
+  let values = [email,  full_name, nick_name, title, birthday, address, phone, line, studentId, graduation_year, self_description, userId];
+
+  db.query(sql, values, (err) =>{
+    if (err) {
+      console.error('เกิดข้อผิดพลาด:', err);
+      return res.status(500).json({ success: false, message: 'เกิดข้อผิดพลาดในการแก้ไขข้อมูลส่วนตัว' });
+    }
+    
+      // // ถ้าผู้ใช้ไม่ได้เปลี่ยนรหัสผ่าน
+      // if (!password) {
+      //   return res.json({ success: true, message: "แก้ไขข้อมูลส่วนตัวสำเร็จ" });
+      // }
+
+    //เปลี่ยนรหัสผ่าน
+    if (password) {
+      bcrypt.hash(password, 10, (err, hashedPassword) => {
+        if (err) {
+          console.error('เกิดข้อผิดพลาดในการเข้ารหัสผ่าน:', err);
+          return res.status(500).json({ success: false, message: 'เกิดข้อผิดพลาดในการแก้ไขรหัสผ่าน' });
+        }
+
+        db.query(`UPDATE users SET password=? WHERE user_id=?`, [hashedPassword, userId], (err) =>{
+          if (err) {
+            console.error('เกิดข้อผิดพลาด:', err);
+            return res.status(500).json({ success: false, message: 'เกิดข้อผิดพลาดในการแก้ไขรหัสผ่าน' });
+          }
+        });
+      });
+    }
+
+    const { major } = req.body;
+    const sqlUpdateMajor = `UPDATE alumni SET major_id=? WHERE user_id=?`;
+    db.query(sqlUpdateMajor, [major, userId], (err) => {
+        if (err) {
+            console.error("เกิดข้อผิดพลาดในการอัปเดต major:", err);
+            return res.status(500).json({ success: false, message: "เกิดข้อผิดพลาดในการอัปเดต major" });
+        }
+        return res.json({ success: true, message: "แก้ไขข้อมูลส่วนตัวสำเร็จ" });
+    });
+
+
+    // อัปเดตระดับการศึกษา
+  //   db.query(`DELETE FROM user_degree WHERE user_id=?`, [userId], (err) => {
+  //     if (err) {
+  //         console.error("เกิดข้อผิดพลาด:", err);
+  //         return res.status(500).json({ success: false, message: "เกิดข้อผิดพลาดในการอัปเดตระดับการศึกษา" });
+  //     }
+
+  //     if (degrees && degrees.length > 0) {
+  //         const degreeValues = degrees.map(degree_id => [userId, degree_id]);
+  //         db.query(`INSERT INTO user_degree (user_id, degree_id) VALUES ?`, [degreeValues], (err) => {
+  //             if (err) {
+  //                 console.error("เกิดข้อผิดพลาด:", err);
+  //                 return res.status(500).json({ success: false, message: "เกิดข้อผิดพลาดในการเพิ่มระดับการศึกษา" });
+  //             }
+  //             res.json({ success: true, message: "อัปเดตข้อมูลสำเร็จ" });
+  //         });
+  //     } else {
+  //         res.json({ success: true, message: "อัปเดตข้อมูลสำเร็จ" });
+  //     }
+  // });
+  });
+} );
 
 module.exports = router; 

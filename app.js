@@ -61,8 +61,8 @@ var aboutRouter = require('./routes/about');
 var registerRouter = require('./routes/register');
 // var alumniRouter = require('./routes/alumni');
 
-var DonateRoute = require('./Routes/donate');
-var SouvenirRoute =  require('./Routes/souvenir');
+var DonateRoute = require('./routes/donate');
+var SouvenirRoute =  require('./routes/souvenir');
 
 app.use('/api', indexRouter);
 app.use('/users', usersRouter);
