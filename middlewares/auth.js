@@ -22,4 +22,16 @@ function checkRole (req, res, next) {
   next();
 }
 
-module.exports = { LoggedIn,checkRole };
+function checkAdmin(req, res, next) {
+  if (!req.session || !req.session.user) {
+      return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
+  }
+
+  if (req.session.user.role !== 0) { // role = 0 หมายถึง Admin
+      return res.status(403).json({ success: false, message: 'คุณไม่มีสิทธิ์เข้าถึงหน้านี้' });
+  }
+
+  next();
+}
+
+module.exports = { LoggedIn,checkRole,checkAdmin };

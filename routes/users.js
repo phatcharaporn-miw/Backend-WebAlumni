@@ -1,100 +1,138 @@
 var express = require('express');
 var router = express.Router();
 var db = require('../db');
-var { LoggedIn, checkRole } = require('../middlewares/auth');
+var { LoggedIn } = require('../middlewares/auth');
 var bcrypt = require('bcrypt');
+var multer = require('multer');
+
+
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, 'uploads/');
+    },
+    filename: (req, file, cb) => {
+        cb(null, file.originalname);
+    }
+});
+
+const upload = multer({ storage: storage });
 
 router.get('/profile', LoggedIn, (req, res) => {
-  // console.log(req.session); 
   if (!req.session.user || !req.session.user.id) {
-    return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
+      return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
   }
-  
-  const userId = req.session.user.id; // รับ ID จาก session
- 
-  const query = `
-    SELECT users.user_id, 
-           users.role_id, 
-           profiles.full_name, 
-           profiles.image_path,
-           profiles.nick_name,
-           profiles.title,
-           profiles.birthday,
-           profiles.self_description,
-           profiles.address,
-           profiles.phone,
-           profiles.email,
-           profiles.line,
-           profiles.studentId,
-           profiles.graduation_year,
-           degree.degree_id,
-           alumni.major_id,
-           major.major_name
-    FROM users
-    JOIN profiles ON users.user_id = profiles.user_id
-    LEFT JOIN user_degree ON users.user_id = user_degree.user_id
-    LEFT JOIN degree ON user_degree.degree_id = degree.degree_id
-    LEFT JOIN alumni ON users.user_id = alumni.user_id
-    LEFT JOIN major ON alumni.major_id = major.major_id
-    WHERE users.user_id = ?
+
+  const userId = req.session.user.id;
+
+  // ดึงข้อมูลโปรไฟล์หลัก
+  const profileQuery = `
+      SELECT 
+          users.user_id, 
+          users.role_id, 
+          profiles.full_name, 
+          profiles.image_path,
+          profiles.nick_name,
+          profiles.title,
+          profiles.birthday,
+          profiles.self_description,
+          profiles.address,
+          profiles.phone,
+          profiles.email,
+          profiles.line,
+          alumni.major_id,
+          major.major_name AS alumni_major_name
+      FROM users
+      JOIN profiles ON users.user_id = profiles.user_id
+      LEFT JOIN alumni ON users.user_id = alumni.user_id
+      LEFT JOIN major ON alumni.major_id = major.major_id
+      WHERE users.user_id = ?
   `;
 
-  db.query(query, [userId], (err, results) => {
-    if (err) {
-      console.error('Database error:', err);
-      return res.status(500).json({ success: false, message: 'Database error' });
-    }
+  // ดึงข้อมูล educations ของ user
+  const educationQuery = `
+      SELECT 
+          educations.degree_id,
+          degree.degree_name,
+          educations.major_id,
+          major.major_name AS education_major_name,
+          educations.studentId,
+          educations.graduation_year
+      FROM educations
+      LEFT JOIN degree ON educations.degree_id = degree.degree_id
+      LEFT JOIN major ON educations.major_id = major.major_id
+      WHERE educations.user_id = ?
+  `;
 
-    if (results.length > 0) { //ในตัวแปร results มีข้อมูลหรือไม่
-    const userProfile = results[0]; //ดึงข้อมูลของผู้ใช้คนแรกจากผลลัพธ์
+  db.query(profileQuery, [userId], (err, profileResults) => {
+      if (err) {
+          console.error('Database error (profile):', err);
+          return res.status(500).json({ success: false, message: 'Database error' });
+      }
 
-// ดึงข้อมูล degree_id ทั้งหมดจากผลลัพธ์
-const degrees = results.filter(row => row.degree_id !== null).map(row => row.degree_id);
-//filter กรองข้อมูลจาก results เลือกแถวที่ degree_id ไม่เป็น null
-//ฟังก์ชัน map จะดึงแค่ค่าของ degree_id จากแถวที่เหลือ
-    res.json({
-      success: true,
-      user: {
-        userId: userProfile.user_id,
-        fullName: userProfile.full_name,
-        nick_name: userProfile.nick_name,
-        title: userProfile.title,
-        birthday: userProfile.birthday,
-        address:userProfile.address,
-        phone:userProfile.phone,
-        email:userProfile.email,
-        line:userProfile.line,
-        studentId:userProfile.studentId,
-        graduation_year:userProfile.graduation_year,
-        profilePicture: `http://localhost:3001/${userProfile.image_path}`,
-        role: userProfile.role_id,
-        degrees: degrees,
-        major: userProfile.major_name,
-      },
-    });
-  } else {
-    res.status(404).json({ success: false, message: 'ไม่พบผู้ใช้'});
-  }
-    
+      if (profileResults.length === 0) {
+          return res.status(404).json({ success: false, message: 'ไม่พบผู้ใช้' });
+      }
+
+      const userProfile = profileResults[0];
+
+      db.query(educationQuery, [userId], (err, educationResults) => {
+          if (err) {
+              console.error('Database error (educations):', err);
+              return res.status(500).json({ success: false, message: 'Database error' });
+          }
+
+          res.json({
+              success: true,
+              user: {
+                  userId: userProfile.user_id,
+                  full_name: userProfile.full_name,
+                  nick_name: userProfile.nick_name,
+                  title: userProfile.title,
+                  birthday: userProfile.birthday,
+                  address: userProfile.address,
+                  phone: userProfile.phone,
+                  email: userProfile.email,
+                  line: userProfile.line,
+                  profilePicture: `http://localhost:3001/${userProfile.image_path}`,
+                  role: userProfile.role_id,
+                  educations: educationResults.map(edu => ({
+                      degree: edu.degree_id,
+                      degree_name: edu.degree_name,
+                      major: edu.major_id,
+                      major_name: edu.education_major_name,
+                      studentId: edu.studentId,
+                      graduation_year: edu.graduation_year,
+                  })),
+              },
+          });
+      });
   });
 });
 
-router.get('/profile/major', async (req, res) => {
-  try {
-      const [rows] = await db.promise().query('SELECT major_id, major_name  FROM major');
-      if (rows.length === 0) {
-          return res.status(404).json({ message: "ไม่มีข้อมูลสาขาในระบบ" });
+
+// username และ password ของผู้ใช้
+router.get('/login-info', LoggedIn, (req, res) => {
+  const userId = req.session.user.id;
+
+  const query = `SELECT username, password FROM login WHERE user_id = ?`;
+
+  db.query(query, [userId], (err, results) => {
+      if (err) {
+          console.error('Error fetching login info:', err);
+          return res.status(500).json({ success: false, message: 'Database error' });
       }
-      res.status(200).json(rows);
-  } catch (error) {
-      console.error('Error fetching majors:', error);
-      res.status(500).json({ message: 'เกิดข้อผิดพลาดในการดึงข้อมูลสาขา' });
-  }
+
+      if (results.length === 0) {
+          return res.status(404).json({ success: false, message: 'ไม่พบข้อมูล' });
+      }
+
+      res.status(200).json({ success: true, loginInfo: results[0] });
+  });
 });
 
 //ส่วนของการแก้ไขข้อมูลส่วนตัว
 router.post('/edit-profile',(req, res) =>{
-  console.log('ข้อมูลที่ได้รับจาก Frontend:', req.body);
+  // console.log('ข้อมูลที่ได้รับจาก Frontend:', req.body);
   const { password, email, full_name, nick_name, title, birthday, address, phone, line,studentId, graduation_year, degree, self_description} = req.body;
   //const userId = req.session.user?.id; 
   const userId = req.session.user.id || null;
@@ -148,29 +186,124 @@ router.post('/edit-profile',(req, res) =>{
         }
         return res.json({ success: true, message: "แก้ไขข้อมูลส่วนตัวสำเร็จ" });
     });
-
-
-    // อัปเดตระดับการศึกษา
-  //   db.query(`DELETE FROM user_degree WHERE user_id=?`, [userId], (err) => {
-  //     if (err) {
-  //         console.error("เกิดข้อผิดพลาด:", err);
-  //         return res.status(500).json({ success: false, message: "เกิดข้อผิดพลาดในการอัปเดตระดับการศึกษา" });
-  //     }
-
-  //     if (degrees && degrees.length > 0) {
-  //         const degreeValues = degrees.map(degree_id => [userId, degree_id]);
-  //         db.query(`INSERT INTO user_degree (user_id, degree_id) VALUES ?`, [degreeValues], (err) => {
-  //             if (err) {
-  //                 console.error("เกิดข้อผิดพลาด:", err);
-  //                 return res.status(500).json({ success: false, message: "เกิดข้อผิดพลาดในการเพิ่มระดับการศึกษา" });
-  //             }
-  //             res.json({ success: true, message: "อัปเดตข้อมูลสำเร็จ" });
-  //         });
-  //     } else {
-  //         res.json({ success: true, message: "อัปเดตข้อมูลสำเร็จ" });
-  //     }
-  // });
   });
-} );
+});
 
-module.exports = router; 
+  //กระทู้ที่เคยสร้าง
+  router.get('/webboard-user/:userId', (req, res) => {
+    const { userId } = req.params;
+
+    const queryPost = `
+    SELECT 
+      webboard.webboard_id,
+      users.user_id,
+      profiles.full_name,
+      profiles.image_path AS profile_image,
+      category.category_id,
+      category.category_name,
+      webboard.title, 
+      webboard.image_path,
+      webboard.content,
+      webboard.viewCount,
+      webboard.favorite,
+      webboard.created_at,
+      webboard.sort_order
+      FROM webboard
+      LEFT JOIN users ON webboard.user_id = users.user_id
+      LEFT JOIN profiles ON users.user_id = profiles.user_id
+      LEFT JOIN category ON webboard.category_id = category.category_id
+      WHERE webboard.user_id = ? AND webboard.deleted_at IS NULL
+    `;
+
+    db.query(queryPost, [userId], (err, results) => {
+      if (err) {
+        console.error('เกิดข้อผิดพลาดในการดึงกระทู้:', err);
+        return res.status(500).json({ success: false, message: 'Database error' });
+      }
+      // console.log("Webboard Results:", results);
+  
+      if (results.length === 0) {
+        return res.status(404).json({ success: false, message: 'ไม่พบกระทู้ของผู้ใช้คนนี้' });
+      }
+  
+      return res.status(200).json({ success: true, data: results });
+    });
+  });
+
+  // webboard ที่ต้องการแก้ไข
+  router.get('/webboard/:webboardId', (req, res) => {
+    const { webboardId } = req.params;
+    const query = `SELECT * FROM webboard WHERE webboard_id = ? AND deleted_at IS NULL`;
+    
+    db.query(query, [webboardId], (err, results) => {
+        if (err) {
+            console.error('เกิดข้อผิดพลาด:', err);
+            return res.status(500).json({ success: false, message: 'Database error' });
+        }
+        if (results.length === 0) {
+            return res.status(404).json({ success: false, message: 'ไม่พบกระทู้' });
+        }
+        const webboard = results[0];
+
+        return res.status(200).json({ success: true, data: results[0], webboardTitle: webboard.title });
+    });
+  });
+
+
+  // edit webboard
+  router.put('/edit-webboard/:webboardId', upload.single("image"), (req, res) => {
+    const {webboardId} = req.params;
+    // const postId = req.params.id;
+    const { title, content,category_id } = req.body;
+    const image_path = req.file ? req.file.path : null; 
+
+
+    if (!title && !content && !image_path && !category_id) {
+      return res.status(400).json({ success: false, message: "ไม่มีข้อมูลที่ต้องแก้ไข" });
+  }
+
+  const queryUpdateWebboard = `
+        UPDATE webboard 
+        SET title = COALESCE(?, title), 
+            content = COALESCE(?, content), 
+            image_path = COALESCE(?, image_path), 
+            category_id = COALESCE(?, category_id),
+            updated_at = NOW()
+        WHERE webboard_id = ? AND deleted_at IS NULL
+    `;
+
+      db.query(queryUpdateWebboard, [title, content, image_path, category_id, webboardId], (err, results) => {
+        if (err) {
+            console.error('เกิดข้อผิดพลาดในการแก้ไขกระทู้:', err);
+            return res.status(500).json({ success: false, message: 'Database error' });
+        }
+
+        if (results.affectedRows === 0) {
+            return res.status(404).json({ success: false, message: 'ไม่พบกระทู้ หรือกระทู้ถูกลบแล้ว' });
+        }
+
+        return res.status(200).json({ success: true, message: 'แก้ไขกระทู้สำเร็จ!' });
+    });
+  })
+
+  //soft delete
+  router.delete('/delete-webboard/:webboardId', (req, res) => {
+    const { webboardId } = req.params;
+
+    const queryDelete = `UPDATE webboard SET deleted_at = NOW() WHERE webboard_id = ?`;
+
+    db.query(queryDelete, [webboardId], (err, results) => {
+      if (err) {
+        console.error('เกิดข้อผิดพลาดในการลบกระทู้:', err);
+        return res.status(500).json({ success: false, message: 'Database error' });
+      }
+
+      if (results.affectedRows === 0) {
+        return res.status(404).json({ success: false, message: 'ไม่พบกระทู้ หรือถูกลบไปแล้ว' });
+    }
+  
+      return res.status(200).json({ success: true, message: 'ลบกระทู้สำเร็จ!' });
+    });
+  })
+
+module.exports = router;
