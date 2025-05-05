@@ -1,10 +1,22 @@
-function LoggedIn(req, res, next) {
-    if (!req.session.user) {
-        console.log('Session user not found:', req.session);
-        return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
-    }
-    next();
+
+const LoggedIn = (req, res, next) => {
+  console.log(" Session in LoggedIn middleware:", req.session);
+  if (!req.session || !req.session.user) {
+    console.log("Session user not found:", req.session);
+    return res.status(401).json({ success: false, message: "กรุณาเข้าสู่ระบบ" });
   }
+  console.log("User logged in:", req.session.user);
+  next();
+};
+
+//เช็คว่าเป็นผู้ใช้ที่ใช้งานอยู่หรือไม่
+function checkActiveUser(req, res, next) {
+  if (!req.session.user || req.session.user.is_active === 0) {
+    return res.status(403).json({ message: "บัญชีของคุณถูกระงับการใช้งาน" });
+  }
+  next();
+}
+
 
 function checkRole (req, res, next) {
     const {id} = req.params; // ID ที่รับมาจาก URL
@@ -22,16 +34,6 @@ function checkRole (req, res, next) {
   next();
 }
 
-function checkAdmin(req, res, next) {
-  if (!req.session || !req.session.user) {
-      return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
-  }
 
-  if (req.session.user.role !== 0) { // role = 0 หมายถึง Admin
-      return res.status(403).json({ success: false, message: 'คุณไม่มีสิทธิ์เข้าถึงหน้านี้' });
-  }
 
-  next();
-}
-
-module.exports = { LoggedIn,checkRole,checkAdmin };
+module.exports = { LoggedIn,checkRole,checkActiveUser };

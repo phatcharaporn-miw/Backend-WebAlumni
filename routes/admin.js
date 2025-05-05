@@ -4,7 +4,8 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const db = require('../db'); 
-var { LoggedIn } = require('../middlewares/auth');
+var { LoggedIn,checkActiveUser } = require('../middlewares/auth');
+const { logUserAction, logManage }= require('../logUserAction'); 
 
 // ตั้งค่า Multer สำหรับอัปโหลดไฟล์
 const storage = multer.diskStorage({
@@ -49,7 +50,7 @@ router.post('/donateRequest', upload.single('image'), (req, res) => {
     const { projectName, description, targetAmount, startDate, endDate, donationType, currentAmount, bankName, accountNumber, numberPromtpay, roleId } = req.body;
 
     if (roleId !== '1') {
-        return res.status(403).json({ error: 'Unauthorized access, only admins can add donation projects' });
+        return res.status(403).json({ error: 'ไม่ได้รับอนุญาต' });
     }
 
     if (!req.file) {
@@ -241,42 +242,48 @@ router.put('/approveSouvenir/:productId', (req, res) => {
         return res.status(400).json({ error: 'Product ID is required' });
     }
 
-    const query = 'UPDATE products SET status = "1" WHERE product_id = ?';
-    
-    db.query(query, [productId], (err, result) => {
+    // ดึงข้อมูลก่อน
+    const getProductQuery = 'SELECT product_name, user_id FROM products WHERE product_id = ?';
+    db.query(getProductQuery, [productId], (err, productResult) => {
         if (err) {
-            console.error('Error updating product status:', err);
-            return res.status(500).json({ error: 'Database error' });
+            console.error('Error fetching product information:', err);
+            return res.status(500).json({ error: 'Database error while fetching product' });
         }
 
-        if (result.affectedRows === 0) {
-            return res.status(404).json({ error: 'Product not found or already updated' });
+        if (productResult.length === 0) {
+            return res.status(404).json({ error: 'Product not found' });
         }
-
-        // ดึงข้อมูล product_name และ user_id ของสินค้าที่ถูกลบ
-        const getProductQuery = 'SELECT product_name, user_id FROM products WHERE product_id = ?';
-        db.query(getProductQuery, [productId], (err, productResult) => {
-            if (err || productResult.length === 0) return res.status(500).json({ error: 'Error fetching product information' });
 
         const productName = productResult[0].product_name;
         const userId = productResult[0].user_id;
 
-        // เพิ่มแจ้งเตือนในตาราง notifications
-        const insertNotification = `
-            INSERT INTO notifications (user_id, type, message, related_id, send_date, status) 
-            VALUES (?, 'approve', ?, ?, NOW(), 'ยังไม่อ่าน')
-        `;
-        const message = `สินค้าของคุณ "${productName}" ได้รับการอนุมัติแล้ว!`;
-        db.query(insertNotification, [userId, message, productId], (err) => {
+        // Update สถานะสินค้า
+        const updateQuery = 'UPDATE products SET status = "1" WHERE product_id = ?';
+        db.query(updateQuery, [productId], (err, result) => {
             if (err) {
-                console.error("Error inserting notification:", err);
-                return res.status(500).json({ error: 'Error inserting notification' });
+                console.error('Error updating product status:', err);
+                return res.status(500).json({ error: 'Database error while updating product status' });
             }
-            res.status(200).json({ message: 'Product status updated successfully and user notified' });
-        });        
+
+            // บันทึก notification
+            const insertNotification = `
+                INSERT INTO notifications (user_id, type, message, related_id, send_date, status) 
+                VALUES (?, 'approve', ?, ?, NOW(), 'ยังไม่อ่าน')
+            `;
+            const message = `สินค้าของคุณ "${productName}" ได้รับการอนุมัติแล้ว!`;
+
+            db.query(insertNotification, [userId, message, productId], (err) => {
+                if (err) {
+                    console.error("Error inserting notification:", err);
+                    return res.status(500).json({ error: 'Error inserting notification' });
+                }
+
+                res.status(200).json({ message: 'Product approved and user notified successfully' });
+            });
         });
     });
 });
+
 
 // แก้ไขข้อมูลสินค้า
 router.put('/editSouvenir/:id', (req, res) => {
@@ -346,26 +353,317 @@ router.delete('/deleteSouvenir/:id', (req, res) => {
 
 
 // ดึงข้อมูลสรุปกิจกรรม
-router.get('/activity-summary', LoggedIn, (req, res) => {
+router.get('/activity-summary', LoggedIn, checkActiveUser, (req, res) => {
     const querySummary = `
     SELECT 
-        (SELECT COUNT(*) FROM activity) AS total_activities, -- กิจกรรมทั้งหมด
-        (SELECT COUNT(*) FROM participants) AS total_participants, -- ผู้เข้าร่วมทั้งหมด
-        (SELECT COUNT(*) FROM activity WHERE activity_date > CURDATE()) AS upcoming_activities, -- กิจกรรมที่ยังไม่ได้เริ่ม
-        (SELECT COUNT(*) FROM activity WHERE COALESCE(end_date, activity_date) < CURDATE()) AS completed_activities, -- กิจกรรมที่สิ้นสุดแล้ว
-        (SELECT COUNT(*) FROM activity WHERE activity_date <= CURDATE() AND COALESCE(end_date, activity_date) >= CURDATE()) AS ongoing_activities -- กิจกรรมที่กำลังดำเนินการ
+        (SELECT COUNT(*) FROM activity WHERE deleted_at IS NULL) AS total_activities, -- กิจกรรมทั้งหมด
+        (SELECT COUNT(*) FROM participants WHERE activity_id IN (SELECT activity_id FROM activity WHERE deleted_at IS NULL)) AS total_participants, -- ผู้เข้าร่วมทั้งหมด
+        (SELECT COUNT(*) FROM activity WHERE activity_date > CURDATE() AND deleted_at IS NULL) AS upcoming_activities, -- กิจกรรมที่ยังไม่ได้เริ่ม
+        (SELECT COUNT(*) FROM activity WHERE COALESCE(end_date, activity_date) < CURDATE() AND deleted_at IS NULL) AS completed_activities, -- กิจกรรมที่สิ้นสุดแล้ว
+        (SELECT COUNT(*) FROM activity WHERE activity_date <= CURDATE() AND COALESCE(end_date, activity_date) >= CURDATE() AND deleted_at IS NULL) AS ongoing_activities -- กิจกรรมที่กำลังดำเนินการ
     FROM DUAL
-`;
+    `;
 
-  db.query(querySummary, (err, results) => {
-      if (err) {
-          console.error('เกิดข้อผิดพลาดในการดึงข้อมูลสรุปกิจกรรม:', err);
-          return res.status(500).json({ success: false, message: 'เกิดข้อผิดพลาดในระบบ' });
-      }
+    db.query(querySummary, (err, results) => {
+        if (err) {
+            console.error('เกิดข้อผิดพลาดในการดึงข้อมูลสรุปกิจกรรม:', err);
+            return res.status(500).json({ success: false, message: 'เกิดข้อผิดพลาดในระบบ' });
+        }
 
-      res.status(200).json({ success: true, data: results[0] });
+        res.status(200).json({ success: true, data: results[0] });
+    });
+});
+
+//จัดการผู้ใช้
+// ดึงข้อมูลผู้ใช้ทั้งหมด
+router.get('/users', (req, res) => {
+    const query = `
+        SELECT 
+            users.user_id, 
+            users.role_id, 
+            users.is_active,
+            role.role_name,  
+            profiles.full_name, 
+            profiles.email        
+        FROM users 
+        LEFT JOIN profiles ON users.user_id = profiles.user_id
+        LEFT JOIN role ON users.role_id = role.role_id
+    `;
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error('Database query failed:', err);
+            return res.status(500).json({ error: 'Database query failed' });
+        }
+        res.json(results);
+    });
+});
+
+// ส่วนของผู้ใช้
+// ดึงข้อมูลผู้ใช้ตาม ID
+router.get('/users/:userId', (req, res) => {
+    const { userId } = req.params;
+
+    const query = `
+        SELECT 
+            users.user_id, 
+            users.role_id,  
+            role.role_name,
+            users.is_active,
+            profiles.full_name, 
+            profiles.email, 
+            profiles.phone, 
+            profiles.address,
+            profiles.image_path,
+            educations.education_id,
+            educations.degree_id,
+            educations.major_id,
+            educations.studentId,
+            educations.graduation_year,
+            degree.degree_name,
+            major.major_name
+        FROM users 
+        LEFT JOIN profiles ON users.user_id = profiles.user_id
+        LEFT JOIN role ON users.role_id = role.role_id
+        LEFT JOIN educations ON users.user_id = educations.user_id
+        LEFT JOIN degree ON educations.degree_id = degree.degree_id
+        LEFT JOIN major ON educations.major_id = major.major_id
+        WHERE users.user_id = ? AND users.deleted_at IS NULL
+    `;
+
+    const queryactivity = `
+    SELECT 
+      participants.activity_id,
+      activity.activity_name,
+      activity.activity_date,
+      activity.description,
+       (
+        SELECT activity_image.image_path 
+        FROM activity_image 
+        WHERE activity_image.activity_id = activity.activity_id 
+        LIMIT 1
+      ) AS image_path,
+      COALESCE(end_date, activity_date) AS end_date, 
+      CASE
+        WHEN COALESCE(end_date, activity_date) < CURDATE() THEN 1  -- เสร็จแล้ว (1)
+        WHEN activity_date > CURDATE() THEN 0  -- กำลังจะจัดขึ้น (0)
+        ELSE 2  -- กำลังดำเนินการ (2)
+      END AS status
+    FROM participants
+    JOIN activity ON participants.activity_id = activity.activity_id
+    WHERE participants.user_id = ?
+    `;
+
+    const queryWebboard = `
+        SELECT webboard_id, title, created_at
+        FROM webboard
+        WHERE user_id = ? AND deleted_at IS NULL
+    `;
+
+    db.query(query, [userId], (err, results) => {
+        if (err) {
+            console.error('Error fetching user profile:', err);
+            return res.status(500).json({ success: false, message: 'Database error' });
+        }
+
+        if (results.length === 0) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        // กรณีผู้ใช้มีหลายวุฒิการศึกษา
+        const userInfo = {
+            user_id: results[0].user_id,
+            role_id: results[0].role_id,
+            role_name: results[0].role_name,
+            is_active: results[0].is_active,
+            full_name: results[0].full_name,
+            email: results[0].email,
+            phone: results[0].phone,
+            address: results[0].address,
+            image_path: results[0].image_path,
+            educations: results.map(edu => ({
+                degree: edu.degree_id,
+                degree_name: edu.degree_name,
+                major: edu.major_id,
+                major_name: edu.major_name,
+                studentId: edu.studentId,
+                graduation_year: edu.graduation_year,
+            })),
+        };
+
+          // ดึงกิจกรรมและโพสต์พร้อมกัน
+        db.query(queryactivity, [userId], (errAct, actResults) => {
+            if (errAct) {
+            console.error("Error fetching activities:", errAct);
+            return res.status(500).json({ success: false, message: 'Error fetching activities' });
+            }
+  
+        db.query(queryWebboard, [userId], (errPost, postResults) => {
+          if (errPost) {
+            console.error("Error fetching posts:", errPost);
+            return res.status(500).json({ success: false, message: 'Error fetching posts' });
+          }
+  
+          userInfo.activities = actResults || [];
+          userInfo.posts = postResults || [];
+
+        res.status(200).json({ success: true, data: userInfo });
+        });
+     });
+    });
+});
+
+
+// เปลี่ยนบทบาทผู้ใช้
+router.put('/:userId/role', (req, res) => {
+  const { userId } = req.params;
+  const { role } = req.body; // ค่าroleใหม่ที่ได้รับจาก frontend
+
+  const query = "UPDATE users SET role_id = ? WHERE user_id = ?";
+  db.query(query, [role, userId], (err, results) => {
+    if (err) {
+      console.error("Error updating role:", err);
+      return res.status(500).send("Error updating role");
+    }
+    
+    // console.log("Role updated successfully for user ID:", userId);
+    logManage(userId, 'เปลี่ยนบทบาทผู้ใช้');
+
+    res.send("เปลี่ยนบทบาทผู้ใช้สำเร็จ");
   });
 });
+
+// ลบผู้ใช้
+router.delete("/delete-user/:userId", (req, res) => {
+    const { userId } = req.params;
+
+    const query = "DELETE FROM users WHERE user_id = ?";
+    db.query(query, [userId], (err, results) => {
+        if (err) {
+            console.error("Error deleting user:", err);
+            return res.status(500).send("Error deleting user");
+        }
+
+        logManage(userId, 'ลบผู้ใช้');
+        res.send("ลบผู้ใช้สำเร็จ");
+    });
+});
+
+
+// เปลี่ยนสถานะผู้ใช้ (เปิดใช้งาน/ระงับ)
+router.put("/:userId/status", (req, res) => {
+    const { userId } = req.params;
+    const { is_active } = req.body; // ค่าสถานะที่ได้รับจาก frontend
+  
+    const query = "UPDATE users SET is_active = ? WHERE user_id = ?";
+    db.query(query, [is_active, userId], (err, results) => {
+      if (err) {
+        console.error("Error updating status:", err);
+        return res.status(500).send("Error updating status");
+      }
+   
+      logManage(userId,'เปลี่ยนสถานะผู้ใช้');
+      res.send("User status updated successfully");
+    });
+});
+
+// ส่วน dashboard
+// จำนวนศิษย์เก่าทั้งหมด
+router.get('/total-alumni', (req, res) => {
+    const query = 'SELECT COUNT(*) AS totalAlumni FROM users WHERE role_id = 3 AND deleted_at IS NULL';
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error('Database query failed:', err);
+            return res.status(500).json({ error: 'Database query failed' });
+        }
+        res.json(results[0]);
+    });
+});
+
+// จำนวนกิจกรรมในแต่ละปี
+router.get('/activity-per-year', (req, res) => {
+    const query = `
+        SELECT 
+            YEAR(activity_date) AS year, 
+            COUNT(*) AS total_activities 
+        FROM activity 
+        WHERE deleted_at IS NULL
+        GROUP BY YEAR(activity_date)
+    `;
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error('Database query failed:', err);
+            return res.status(500).json({ error: 'Database query failed' });
+        }
+        res.json(results);
+    });
+});
+
+// สถิติการบริจาคแยกตามไตรมาส
+// router.get('/donation-stats', (req, res) => {
+//     const query = `
+//         SELECT 
+//             QUARTER(donation_date) AS quarter, 
+//             YEAR(donation_date) AS year, 
+//             SUM(amount) AS total_donations 
+//         FROM donations 
+//         WHERE deleted_at IS NULL
+//         GROUP BY QUARTER(donation_date), YEAR(donation_date)
+//     `;
+//     db.query(query, (err, results) => {
+//         if (err) {
+//             console.error('Database query failed:', err);
+//             return res.status(500).json({ error: 'Database query failed' });
+//         }
+//         res.json(results);
+//     });
+// });
+
+// GET /admin/dashboard-stats
+router.get('/dashboard-stats', (req, res) => {
+    let result = {
+      totalParticipants: 0,
+      ongoingActivity: 0,
+      ongoingProject: 0,
+      totalDonations: 0,
+    };
+  
+    db.query('SELECT COUNT(*) AS total FROM participants', (err, participants) => {
+      if (err) {
+        console.error('Error fetching participants:', err);
+        return res.status(500).json({ message: 'Internal server error' });
+      }
+      result.totalParticipants = participants[0].total;
+  
+      db.query("SELECT COUNT(*) AS total FROM activity WHERE status = 2", (err, activities) => {
+        if (err) {
+          console.error('Error fetching activities:', err);
+          return res.status(500).json({ message: 'Internal server error' });
+        }
+        result.ongoingActivity = activities[0].total;
+  
+        db.query("SELECT COUNT(*) AS total FROM donationproject WHERE status = 1", (err, projects) => {
+          if (err) {
+            console.error('Error fetching donation projects:', err);
+            return res.status(500).json({ message: 'Internal server error' });
+          }
+          result.ongoingProject = projects[0].total;
+  
+          db.query('SELECT SUM(amount) AS total FROM donations', (err, donations) => {
+            if (err) {
+              console.error('Error fetching donations:', err);
+              return res.status(500).json({ message: 'Internal server error' });
+            }
+            result.totalDonations = donations[0].total || 0;
+  
+            // ส่งผลลัพธ์สุดท้าย
+            res.json(result);
+          });
+        });
+      });
+    });
+});
+
+
 
 
 module.exports = router;

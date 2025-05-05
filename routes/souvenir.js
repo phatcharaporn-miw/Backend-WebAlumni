@@ -1,3 +1,4 @@
+// souvenir.js (User)
 const express = require("express");
 const route = express.Router();
 const multer = require('multer');
@@ -20,7 +21,6 @@ const storage = multer.diskStorage({
 });
 
 const upload = multer({ storage });
-
 
 // ดึงข้อมูลสินค้าทั้งหมด
 route.get('/', (req, res) => {
@@ -66,6 +66,7 @@ route.post('/addsouvenir', upload.single('image'), (req, res) => {
     const { productName, description, price, stock, paymentMethod, bankName, accountNumber, accountName, promptpayNumber } = req.body;
     const user_id = req.body.user_id;
     const image = req.file ? req.file.filename : null;
+
 
     if (!image) {
         return res.status(400).json({ error: 'Image is required' });

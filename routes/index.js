@@ -3,13 +3,13 @@ var router = express.Router();
 var db = require('../db');
 const bcrypt = require('bcrypt');
 const nodemailer = require('nodemailer');
-const { logUserAction, logActivity }= require('../logUserAction'); 
+const { logUserAction }= require('../logUserAction'); 
 
 router.post('/login', (req, res) => {
   const { username, password } = req.body;
 
   const query = `
-    SELECT login.*, role.role_id, profiles.image_path
+    SELECT login.*, role.role_id, profiles.image_path, users.is_active
     FROM login
     JOIN users ON login.user_id = users.user_id
     JOIN role ON users.role_id = role.role_id
@@ -29,6 +29,11 @@ router.post('/login', (req, res) => {
 
     const user = results[0];
 
+    // ตรวจสอบสถานะผู้ใช้ (is_active)
+    if (parseInt(user.is_active) === 0) {
+      return res.status(403).json({ success: false, message: "บัญชีของคุณถูกระงับการใช้งาน" });
+    }
+
     bcrypt.compare(password, user.password, (err, match) => {
       if (err) {
         console.error('Error comparing passwords:', err);
@@ -46,8 +51,8 @@ router.post('/login', (req, res) => {
       };
 
        // บันทึก log login
-      //  const ip = req.ip;
-      //  logUserAction(user.user_id, 'login', ip);
+       const ip = req.ip;
+       logUserAction(user.user_id, 'login', ip);
 
       // ส่งข้อมูลกลับไปที่ frontend
       res.json({ 

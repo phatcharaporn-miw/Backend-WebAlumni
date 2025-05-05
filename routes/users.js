@@ -1,10 +1,10 @@
 var express = require('express');
 var router = express.Router();
 var db = require('../db');
-var { LoggedIn } = require('../middlewares/auth');
+var { LoggedIn, checkActiveUser } = require('../middlewares/auth');
 var bcrypt = require('bcrypt');
 var multer = require('multer');
-
+const { logWebboard }= require('../logUserAction'); 
 
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -17,7 +17,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage: storage });
 
-router.get('/profile', LoggedIn, (req, res) => {
+router.get('/profile', LoggedIn, checkActiveUser, (req, res) => {
   if (!req.session.user || !req.session.user.id) {
       return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
   }
@@ -111,7 +111,7 @@ router.get('/profile', LoggedIn, (req, res) => {
 
 
 // username และ password ของผู้ใช้
-router.get('/login-info', LoggedIn, (req, res) => {
+router.get('/login-info', LoggedIn, checkActiveUser,(req, res) => {
   const userId = req.session.user.id;
 
   const query = `SELECT username, password FROM login WHERE user_id = ?`;
@@ -245,24 +245,29 @@ router.post('/edit-profile',(req, res) =>{
         }
         const webboard = results[0];
 
+        
         return res.status(200).json({ success: true, data: results[0], webboardTitle: webboard.title });
     });
   });
 
 
-  // edit webboard
+  // แก้ไขกระทู้
   router.put('/edit-webboard/:webboardId', upload.single("image"), (req, res) => {
-    const {webboardId} = req.params;
-    // const postId = req.params.id;
-    const { title, content,category_id } = req.body;
-    const image_path = req.file ? req.file.path : null; 
+    const { webboardId } = req.params;
+    // const userId = req.session.user.id;
 
+  //   if (!req.session || !req.session.user || !req.session.user.id) {
+  //     return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
+  // }
+
+    const { title, content, category_id } = req.body;
+    const image_path = req.file ? req.file.path : null;
 
     if (!title && !content && !image_path && !category_id) {
-      return res.status(400).json({ success: false, message: "ไม่มีข้อมูลที่ต้องแก้ไข" });
-  }
+        return res.status(400).json({ success: false, message: "ไม่มีข้อมูลที่ต้องแก้ไข" });
+    }
 
-  const queryUpdateWebboard = `
+    const queryUpdateWebboard = `
         UPDATE webboard 
         SET title = COALESCE(?, title), 
             content = COALESCE(?, content), 
@@ -272,7 +277,7 @@ router.post('/edit-profile',(req, res) =>{
         WHERE webboard_id = ? AND deleted_at IS NULL
     `;
 
-      db.query(queryUpdateWebboard, [title, content, image_path, category_id, webboardId], (err, results) => {
+    db.query(queryUpdateWebboard, [title, content, image_path, category_id, webboardId], (err, results) => {
         if (err) {
             console.error('เกิดข้อผิดพลาดในการแก้ไขกระทู้:', err);
             return res.status(500).json({ success: false, message: 'Database error' });
@@ -282,9 +287,10 @@ router.post('/edit-profile',(req, res) =>{
             return res.status(404).json({ success: false, message: 'ไม่พบกระทู้ หรือกระทู้ถูกลบแล้ว' });
         }
 
+        // logWebboard(userId, webboardId, 'แก้ไขกระทู้'); 
         return res.status(200).json({ success: true, message: 'แก้ไขกระทู้สำเร็จ!' });
     });
-  })
+});
 
   //soft delete
   router.delete('/delete-webboard/:webboardId', (req, res) => {
@@ -305,5 +311,7 @@ router.post('/edit-profile',(req, res) =>{
       return res.status(200).json({ success: true, message: 'ลบกระทู้สำเร็จ!' });
     });
   })
+
+  
 
 module.exports = router;
