@@ -34,14 +34,7 @@ route.get('/', (req, res) => {
     JOIN role ON users.role_id = role.role_id
     WHERE status = "1"
     `;
-    const query = `
-    SELECT 
-    products.*, role.role_id
-    FROM products 
-    JOIN users ON products.user_id = users.user_id
-    JOIN role ON users.role_id = role.role_id
-    WHERE status = "1"
-    `;
+
     db.query(query, (err, results) => {
         if (err) {
             console.error('Database query failed:', err);

@@ -177,7 +177,6 @@ router.post('/register', upload.single('image_path'), async (req, res) => {
 router.get('/major', async (req, res) => {
     try {
         const [rows] = await db.promise().query('SELECT major_id, major_name FROM major');
-        const [rows] = await db.promise().query('SELECT major_id, major_name FROM major');
         if (rows.length === 0) {
             return res.status(404).json({ success: false, message: "ไม่มีข้อมูลสาขาในระบบ" });
         }
