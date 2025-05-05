@@ -2,6 +2,7 @@ var express = require('express');
 var router = express.Router();
 var db = require('../db');
 var bcrypt = require('bcrypt');
+var bcrypt = require('bcrypt');
 const multer = require('multer');
 var img = multer({ dest: 'img/'});
 const path = require('path');
@@ -12,9 +13,12 @@ function validatePassword(password) {
 }
 
 // การตั้งค่า multer สำหรับการอัปโหลดไฟล์
+// การตั้งค่า multer สำหรับการอัปโหลดไฟล์
 const upload = multer({
     storage: multer.diskStorage({
         destination: (req, file, cb) => {
+            // เก็บไฟล์ในโฟลเดอร์ img ที่อยู่ใน root ของโปรเจกต์
+            cb(null, path.join(__dirname, '..', 'img'));
             // เก็บไฟล์ในโฟลเดอร์ img ที่อยู่ใน root ของโปรเจกต์
             cb(null, path.join(__dirname, '..', 'img'));
         },
@@ -25,15 +29,19 @@ const upload = multer({
     }),
     fileFilter: (req, file, cb) => {
         // ตรวจสอบว่าไฟล์ที่อัปโหลดเป็นไฟล์รูปภาพหรือไม่
+        // ตรวจสอบว่าไฟล์ที่อัปโหลดเป็นไฟล์รูปภาพหรือไม่
         if (file.mimetype.startsWith('image/')) {
+            cb(null, true);
             cb(null, true);
         } else {
             cb(new Error('กรุณาอัปโหลดไฟล์รูปภาพเท่านั้น'), false);
         }
     },
     limits: { fileSize: 5 * 1024 * 1024 },  // จำกัดขนาดไฟล์ 5MB
+    limits: { fileSize: 5 * 1024 * 1024 },  // จำกัดขนาดไฟล์ 5MB
 });
 
+// Route สำหรับลงทะเบียนผู้ใช้ใหม่
 // Route สำหรับลงทะเบียนผู้ใช้ใหม่
 router.post('/register', upload.single('image_path'), async (req, res) => {
     console.log(req.body);
@@ -75,13 +83,17 @@ router.post('/register', upload.single('image_path'), async (req, res) => {
         }
 
         // สร้าง hash ของรหัสผ่าน
+
+        // สร้าง hash ของรหัสผ่าน
         const hashedPassword = await bcrypt.hash(password, 10);
 
+        // สร้างข้อมูลผู้ใช้ในตาราง users
         // สร้างข้อมูลผู้ใช้ในตาราง users
         const queryUser = 'INSERT INTO users (role_id, created_at, updated_at) VALUES (?, NOW(), NOW())';
         const [userResult] = await db.promise().query(queryUser, [role]);
         const user_id = userResult.insertId;
 
+        // เพิ่มข้อมูลในตาราง login
         // เพิ่มข้อมูลในตาราง login
         const queryLogin = 'INSERT INTO login (user_id, username, password) VALUES (?, ?, ?)';
         await db.promise().query(queryLogin, [user_id, username, hashedPassword]);
@@ -164,6 +176,7 @@ router.post('/register', upload.single('image_path'), async (req, res) => {
 //ดึงข้อมูลสาขามาแสดง
 router.get('/major', async (req, res) => {
     try {
+        const [rows] = await db.promise().query('SELECT major_id, major_name FROM major');
         const [rows] = await db.promise().query('SELECT major_id, major_name FROM major');
         if (rows.length === 0) {
             return res.status(404).json({ success: false, message: "ไม่มีข้อมูลสาขาในระบบ" });

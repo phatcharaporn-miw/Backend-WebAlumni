@@ -1,4 +1,5 @@
 // souvenir.js (User)
+// souvenir.js (User)
 const express = require("express");
 const route = express.Router();
 const multer = require('multer');
@@ -22,8 +23,17 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
+
 // ดึงข้อมูลสินค้าทั้งหมด
 route.get('/', (req, res) => {
+    const query = `
+    SELECT 
+    products.*, role.role_id
+    FROM products 
+    JOIN users ON products.user_id = users.user_id
+    JOIN role ON users.role_id = role.role_id
+    WHERE status = "1"
+    `;
     const query = `
     SELECT 
     products.*, role.role_id
@@ -43,6 +53,8 @@ route.get('/', (req, res) => {
 });
 
 // ดึงรายละเอียดของสินค้า
+
+// ดึงรายละเอียดของสินค้า
 route.get('/souvenirDetail/:id', (req, res) => {
     const productId = req.params.id;
 
@@ -57,6 +69,7 @@ route.get('/souvenirDetail/:id', (req, res) => {
             return res.status(404).json({ error: 'Product not found' });
         }
 
+        res.status(200).json(results[0]);
         res.status(200).json(results[0]);
     });
 });

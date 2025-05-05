@@ -27,6 +27,7 @@ app.use(bodyParser.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 
+
 app.use(cors({
   origin:"http://localhost:3002", // URL ของ Frontend
   credentials: true, // อนุญาตการส่ง cookies
@@ -91,6 +92,8 @@ app.use(function (req, res, next) {
   next(createError(404));
 });
 
+// Error handler
+app.use(function (err, req, res, next) {
 // Error handler
 app.use(function (err, req, res, next) {
   res.locals.message = err.message;
