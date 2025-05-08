@@ -85,14 +85,13 @@ router.get('/webboard', (req, res) => {
     const formattedResults = results.map(post => ({
       ...post,
       liked_users: post.liked_users || ""
-    }));
-    
+    }));    
 
     res.json({ success: true, data: formattedResults });
   });
 });
 
-
+// แสดงกระทู้ตามไอดี
 router.get('/webboard/:id', (req, res) => {
   const postId = req.params.id;
 
@@ -172,6 +171,7 @@ router.get('/webboard/:id', (req, res) => {
                   SELECT 
                       replies.reply_id,
                       replies.comment_id,
+                      replies.user_id, 
                       replies.reply_detail,
                       replies.created_at,
                       profiles.full_name,
@@ -343,7 +343,7 @@ router.post('/webboard/:id/comment', LoggedIn, checkActiveUser,(req, res) => {
                         return res.status(500).json({ success: false, message: 'Database error' });
                     }
 
-                    logWebboard(userId, webboardIdId, 'แสดงความคิดเห็น');
+                    logWebboard(userId, postId, 'แสดงความคิดเห็น');
 
                     res.status(200).json({ success: true, comment: commentResults[0] });
                 });
@@ -354,7 +354,7 @@ router.post('/webboard/:id/comment', LoggedIn, checkActiveUser,(req, res) => {
 
   // ตอบกลับความคิดเห็น
   router.post('/webboard/:webboardId/comment/:commentId/reply', LoggedIn, checkActiveUser, (req, res) => {
-    const { webboardId, commentId } = req.params;
+    const { commentId } = req.params;
     const { reply_detail } = req.body;
     const userId = req.session.user.id;
 
@@ -378,6 +378,7 @@ router.post('/webboard/:id/comment', LoggedIn, checkActiveUser,(req, res) => {
       const queryGetReply = `
         SELECT 
           replies.reply_id,
+          replies.user_id,
           replies.reply_detail,
           replies.created_at,
           profiles.full_name,
@@ -392,23 +393,25 @@ router.post('/webboard/:id/comment', LoggedIn, checkActiveUser,(req, res) => {
           console.error('เกิดข้อผิดพลาดในการดึงข้อมูลการตอบกลับ:', err);
           return res.status(500).json({ success: false, message: 'Database error' });
         }
-
-        res.status(200).json(replyResults[0]); 
-      });
+      
+        if (replyResults.length === 0) {
+          console.error('ไม่พบข้อมูลการตอบกลับในฐานข้อมูล');
+          return res.status(404).json({ success: false, message: 'ไม่พบข้อมูลการตอบกลับ' });
+        }
+      
+        // console.log("Reply ส่งกลับ:", replyResults[0]); 
+        return res.status(200).json(replyResults[0]);
+      });      
     });
   }); 
 
-
-  router.delete('/webboard/:webboardId/comment/:commentId', (req, res) => {
+// ลบการแสดงความคิดเห็น
+  router.delete('/webboard/:webboardId/comment/:commentId',LoggedIn, checkActiveUser, (req, res) => {
     const { commentId } = req.params;
-    // const role = req.session.role; // หรือ req.session.user.role
-  
-    // if (role !== 'admin' && role !== 1) {
-    //   return res.status(403).json({ success: false, message: 'ไม่มีสิทธิ์ลบความคิดเห็นนี้' });
-    // }
-  
-    const sql = 'DELETE FROM comment WHERE comment_id = ?';
-    db.query(sql, [commentId], (err, result) => {
+    const userId = req.session.user.id;
+
+    const queryDeleteComment = 'DELETE FROM comment WHERE comment_id = ?';
+    db.query(queryDeleteComment, [commentId, userId], (err, result) => {
       if (err) {
         console.error('ลบความคิดเห็นล้มเหลว:', err);
         return res.status(500).json({ success: false });
@@ -418,19 +421,37 @@ router.post('/webboard/:id/comment', LoggedIn, checkActiveUser,(req, res) => {
         return res.status(404).json({ success: false, message: 'ไม่พบความคิดเห็นนี้' });
       }
   
-      // logWebboard(userId, commentId, 'ลบความคิดเห็น');
+      logWebboard(userId, commentId, 'ลบความคิดเห็น');
 
       res.json({ success: true, message: 'ลบสำเร็จ' });
     });
   });
   
-  // Middleware ตรวจสอบการ login
-  // function LoggedIn(req, res, next) {
-  //   if (!req.session || !req.session.user || !req.session.user.id) {
-  //     return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
-  //   }
-  //   next();
-  // }
+// ลบการตอบกลับ
+router.delete('/webboard/:webboardId/comment/:commentId/reply/:replyId', LoggedIn, checkActiveUser, (req, res) => {
+  const { commentId, replyId  } = req.params;
+  const userId = req.session.user.id;
+
+  const deleteQuery = `
+    DELETE FROM replies 
+    WHERE reply_id = ? AND comment_id = ? AND user_id = ?
+  `;
+
+  db.query(deleteQuery, [replyId, commentId, userId], (err, result) => {
+    if (err) {
+      console.error('เกิดข้อผิดพลาดในการลบ reply:', err);
+      return res.status(500).json({ success: false, message: 'Database error' });
+    }
+
+    if (result.affectedRows === 0) {
+      return res.status(403).json({ success: false, message: 'ไม่สามารถลบได้ หรือคุณไม่มีสิทธิ์' });
+    }
+
+    logWebboard(userId, replyId, 'ลบการตอบกลับ comment');
+    res.status(200).json({ success: true, message: 'ลบการตอบกลับเรียบร้อยแล้ว' });
+  });
+});
+
 
 //กดใจกระทู้ และแจ้งเตือน
 router.post('/webboard/:postId/favorite', LoggedIn, checkActiveUser, (req, res) => {

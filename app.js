@@ -28,9 +28,23 @@ app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 
 
+// app.use(cors({
+//   origin:"http://localhost:3002", // URL ของ Frontend
+//   credentials: true, 
+// }));
+
+const allowedOrigins = ["http://localhost:3001", "http://localhost:3002"];
+
 app.use(cors({
-  origin:"http://localhost:3002", // URL ของ Frontend
-  credentials: true, // อนุญาตการส่ง cookies
+  origin: function (origin, callback) {
+    // ถ้าไม่มี origin (เช่น จาก Postman) หรืออยู่ใน whitelist
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  credentials: true,
 }));
 
 app.use('/img', express.static('img'));
@@ -94,8 +108,6 @@ app.use(function (req, res, next) {
 
 // Error handler
 app.use(function (err, req, res, next) {
-// Error handler
-app.use(function (err, req, res, next) {
   res.locals.message = err.message;
   res.locals.error = req.app.get('env') === 'development' ? err : {};
 
@@ -106,6 +118,6 @@ app.use(function (err, req, res, next) {
 app.listen(3001, () => {
   console.log(`Server running on port 3001`);
 });
-});
+
 
 module.exports = app;
