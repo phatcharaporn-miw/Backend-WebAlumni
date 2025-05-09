@@ -512,7 +512,81 @@ router.get('/users/:userId', (req, res) => {
     });
 });
 
+// แก้ไขโปรไฟล์ผู้ใช้
+router.put('/edit-profile-users/:userId', (req, res) => {
+    const userId = req.params.userId;
+    const { email, phone, address, educations } = req.body;
 
+    const queryUpdateProfile = `UPDATE profiles SET email = ?, phone = ?, address = ? WHERE user_id = ?`;
+    db.query(queryUpdateProfile, [email, phone, address, userId], (err) => {
+        if (err) {
+            console.error("Profile update error:", err);
+            return res.status(500).json({ success: false, message: "อัปเดตโปรไฟล์ล้มเหลว" });
+        }
+
+        const deleteEducations = `DELETE FROM educations WHERE user_id = ?`;
+        db.query(deleteEducations, [userId], (err) => {
+            if (err) {
+                console.error("Education delete error:", err);
+                return res.status(500).json({ success: false, message: "ลบข้อมูลการศึกษาล้มเหลว" });
+            }
+
+            if (educations && educations.length > 0) {
+                const filtered = educations.filter(e =>
+                    e.degree_id && e.major_id && e.studentId && e.graduation_year
+                );
+
+                if (filtered.length === 0) {
+                    return res.status(400).json({ success: false, message: "ข้อมูลการศึกษาไม่ครบถ้วน" });
+                }
+
+                const insertEduSql = `
+                    INSERT INTO educations (user_id, degree_id, major_id, studentId, graduation_year)
+                    VALUES ?
+                `;
+                const values = filtered.map(e => [
+                    userId,
+                    e.degree_id,
+                    e.major_id,
+                    e.studentId,
+                    e.graduation_year,
+                ]);
+
+                db.query(insertEduSql, [values], (err, result) => {
+                    if (err) {
+                        console.error("Education insert error:", err);
+                        return res.status(500).json({ success: false, message: "เพิ่มข้อมูลการศึกษาล้มเหลว" });
+                    }
+
+                    logManage(userId, 'แก้ไขโปรไฟล์ผู้ใช้');
+                    return res.json({ success: true, message: "อัปเดตข้อมูลสำเร็จ" });
+                });
+
+            } else {
+                logManage(userId, 'แก้ไขโปรไฟล์ผู้ใช้ (ไม่มีข้อมูลการศึกษา)');
+                return res.json({ success: true, message: "อัปเดตข้อมูลสำเร็จ (ไม่มีข้อมูลการศึกษาใหม่)" });
+            }
+        });
+    });
+});
+
+// Get all degrees
+router.get("/degrees", (req, res) => {
+    db.query("SELECT degree_id, degree_name FROM degree", (err, result) => {
+      if (err) return res.status(500).json([]);
+      res.json(result);
+    });
+});
+  
+  // Get all majors
+router.get("/majors", (req, res) => {
+    db.query("SELECT major_id, major_name FROM major", (err, result) => {
+      if (err) return res.status(500).json([]);
+      res.json(result);
+    });
+});
+  
+ 
 // เปลี่ยนบทบาทผู้ใช้
 router.put('/:userId/role', (req, res) => {
   const { userId } = req.params;

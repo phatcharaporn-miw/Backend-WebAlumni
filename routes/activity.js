@@ -450,6 +450,7 @@ router.get('/all-activity', (req, res) => {
                 console.error('เกิดข้อผิดพลาดในการเพิ่มข้อมูลแบบฟอร์ม:', err);
                 return res.status(500).json({ error: 'เกิดข้อผิดพลาดในระบบ' });
             }
+
             logActivity(userId, activity, 'ลงทะเบียนเข้าร่วมกิจกรรม');
             
             res.status(200).json({ success: true, message: 'ลงทะเบียนเข้าร่วมกิจกรรมสำเร็จ!' });
@@ -541,26 +542,25 @@ router.get('/activity-history/:userId', LoggedIn, checkActiveUser,(req, res) => 
   });
 });
 
-// ตรวจสอบการลงทะเบียนกิจกรรม
-router.get('/joined-activities', (req, res) => {
-  const userId = req.query.id; // ← อย่าพิมพ์ userId
 
-  if (!userId) {
-    return res.status(400).json({ success: false, message: 'user_id is required' });
+// ตรวจสอบว่าผู้ใช้เข้าร่วมกิจกรรมนี้แล้วหรือยัง
+router.get('/check-join/:activityId', (req, res) => {
+  const userId = req.session.user.id;
+  const {activityId }= req.params;
+
+  if (!userId || !activityId) {
+    return res.status(400).json({ success: false, message: 'ข้อมูลไม่ครบถ้วน' });
   }
 
-  const query = `SELECT activity_id FROM participants WHERE user_id = ? AND status = 1`;
-  db.query(query, [userId], (err, results) => {
+  const query = `SELECT * FROM participants WHERE user_id = ? AND activity_id = ? AND status = 1`;
+  db.query(query, [userId, activityId], (err, results) => {
     if (err) {
       console.error("Database error:", err);
       return res.status(500).json({ success: false, message: 'เกิดข้อผิดพลาด' });
     }
 
-    if (results.length === 0) {
-      return res.status(404).json({ success: false, message: "ไม่พบกิจกรรม" });
-    }
-
-    return res.status(200).json({ success: true, joinedActivities: results });
+    const joined = results.length > 0;
+    return res.status(200).json({ success: true, joined });
   });
 });
 
