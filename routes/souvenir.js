@@ -46,8 +46,6 @@ route.get('/', (req, res) => {
 });
 
 // ดึงรายละเอียดของสินค้า
-
-// ดึงรายละเอียดของสินค้า
 route.get('/souvenirDetail/:id', (req, res) => {
     const productId = req.params.id;
 
@@ -62,7 +60,6 @@ route.get('/souvenirDetail/:id', (req, res) => {
             return res.status(404).json({ error: 'Product not found' });
         }
 
-        res.status(200).json(results[0]);
         res.status(200).json(results[0]);
     });
 });
