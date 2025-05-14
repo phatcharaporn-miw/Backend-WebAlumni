@@ -1,5 +1,4 @@
 // souvenir.js (User)
-// souvenir.js (User)
 const express = require("express");
 const route = express.Router();
 const multer = require('multer');
@@ -65,11 +64,110 @@ route.get('/souvenirDetail/:id', (req, res) => {
 });
 
 // เพิ่มสินค้า
+// route.post('/addsouvenir', upload.single('image'), (req, res) => {
+//     const { productName, description, price, stock, paymentMethod, bankName, accountNumber, accountName, promptpayNumber } = req.body;
+//     const user_id = req.body.user_id;
+//     const image = req.file ? req.file.filename : null;
+
+//     if (!image) {
+//         return res.status(400).json({ error: 'Image is required' });
+//     }
+
+//     if (!productName || !description || !price || !stock || !paymentMethod || !bankName || !accountNumber || !accountName) {
+//         return res.status(400).json({ error: 'All fields are required' });
+//     }
+
+//     const queryPayment = `
+//         INSERT INTO payment_methods 
+//         (method_name, bank_name, account_name, account_number, promptpay_number) 
+//         VALUES (?, ?, ?, ?, ?)
+//     `;
+
+//     const valuesPayment = [
+//         paymentMethod,
+//         bankName,
+//         accountName,
+//         accountNumber,
+//         promptpayNumber
+//     ];
+
+//     db.query(queryPayment, valuesPayment, (err, result) => {
+//         if (err) {
+//             console.error('Error inserting payment method:', err);
+//             return res.status(500).json({ error: 'Error inserting payment method' });
+//         }
+
+//         const payment_method_id = result.insertId;
+
+//         const queryProduct = `
+//             INSERT INTO products 
+//             (product_name, description, image, price, stock, user_id, status, payment_method_id) 
+//             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+//         `;
+
+//         const valuesProduct = [
+//             productName,
+//             description,
+//             image,
+//             price,
+//             stock,
+//             user_id,
+//             "0",  // ยังไม่อนุมัติ
+//             payment_method_id
+//         ];
+
+//         db.query(queryProduct, valuesProduct, (err, result) => {
+//             if (err) {
+//                 console.error('Error inserting product:', err);
+
+//                 // Rollback: ลบ payment method ที่เพิ่มไป
+//             db.query(`DELETE FROM payment_methods WHERE id = ?`, [payment_method_id], (deleteErr) => {
+//                 if (deleteErr) {
+//                     console.error('Rollback failed:', deleteErr);
+//                 }
+//             });
+//                 return res.status(500).json({ error: 'Error inserting product' });
+//             }
+
+//             //เพิ่มแจ้งเตือนหลังจากเพิ่มสินค้า
+//             const insertedProductName = productName;
+//             const notifyQuery = `
+//                 INSERT INTO notifications (user_id, type, message)
+//                 VALUES ?
+//             `;
+
+//             db.query(`SELECT user_id FROM users WHERE role_id IN (1, 2)`, (err, resultUsers) => {
+//                 if (err) {
+//                     console.error('Error fetching target users for notification:', err);
+//                     return res.status(500).json({ error: 'Failed to send notifications' });
+//                 }
+
+//                 const notifications = resultUsers.map(row => [
+//                     row.user_id,
+//                     'souvenir_request',
+//                     `มีคำขอเพิ่มของที่ระลึก: ${insertedProductName}`
+//                 ]);
+
+//                 if (notifications.length > 0) {
+//                     db.query(notifyQuery, [notifications], (err, notifyResult) => {
+//                         if (err) {
+//                             console.error('Error inserting notifications:', err);
+//                             return res.status(500).json({ error: 'Failed to insert notifications' });
+//                         }
+
+//                         return res.status(200).json({ message: 'Product, payment method, and notifications added successfully' });
+//                     });
+//                 } else {
+//                     return res.status(200).json({ message: 'Product and payment method added (no users to notify)' });
+//                 }
+//             });
+//         });
+//     });
+// });
 route.post('/addsouvenir', upload.single('image'), (req, res) => {
     const { productName, description, price, stock, paymentMethod, bankName, accountNumber, accountName, promptpayNumber } = req.body;
     const user_id = req.body.user_id;
     const image = req.file ? req.file.filename : null;
-
 
     if (!image) {
         return res.status(400).json({ error: 'Image is required' });
@@ -79,55 +177,118 @@ route.post('/addsouvenir', upload.single('image'), (req, res) => {
         return res.status(400).json({ error: 'All fields are required' });
     }
 
-    const queryPayment = `
-    INSERT INTO payment_methods 
-    (method_name, bank_name, account_name, account_number, promptpay_number) 
-    VALUES (?, ?, ?, ?, ?)
-    `;
-
-    const valuesPayment = [
-        paymentMethod,
-        bankName,
-        accountName,
-        accountNumber,
-        promptpayNumber
-    ];
-
-    db.query(queryPayment, valuesPayment, (err, result) => {
+    // Begin transaction
+    db.beginTransaction((err) => {
         if (err) {
-            console.error('Error inserting payment method:', err);
-            return res.status(500).json({ error: 'Error inserting payment method' });
+            return res.status(500).json({ error: 'Failed to start transaction' });
         }
 
-        const payment_method_id = result.insertId; 
-
-        const queryProduct = `
-        INSERT INTO products 
-        (product_name, description, image, price, stock, user_id, status, payment_method_id) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        const queryPayment = `
+            INSERT INTO payment_methods 
+            (method_name, bank_name, account_name, account_number, promptpay_number) 
+            VALUES (?, ?, ?, ?, ?)
         `;
-
-        const valuesProduct = [
-            productName,
-            description,
-            image,
-            price,
-            stock,
-            user_id,
-            "0",  
-            payment_method_id,
+        const valuesPayment = [
+            paymentMethod,
+            bankName,
+            accountName,
+            accountNumber,
+            promptpayNumber
         ];
 
-        db.query(queryProduct, valuesProduct, (err, result) => {
+        db.query(queryPayment, valuesPayment, (err, result) => {
             if (err) {
-                console.error('Error inserting product:', err);
-                return res.status(500).json({ error: 'Error inserting product' });
+                return db.rollback(() => {
+                    return res.status(500).json({ error: 'Error inserting payment method' });
+                });
             }
 
-            res.status(200).json({ message: 'Product and payment method added successfully' });
+            const payment_method_id = result.insertId;
+
+            const queryProduct = `
+                INSERT INTO products 
+                (product_name, description, image, price, stock, user_id, status, payment_method_id) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `;
+            const valuesProduct = [
+                productName,
+                description,
+                image,
+                price,
+                stock,
+                user_id,
+                "0",  // ยังไม่อนุมัติ
+                payment_method_id
+            ];
+
+            db.query(queryProduct, valuesProduct, (err, result) => {
+                if (err) {
+                    return db.rollback(() => {
+                        // Rollback: ลบ payment method ที่เพิ่มไป
+                        db.query(`DELETE FROM payment_methods WHERE id = ?`, [payment_method_id], (deleteErr) => {
+                            if (deleteErr) {
+                                console.error('Rollback failed:', deleteErr);
+                            }
+                        });
+                        return res.status(500).json({ error: 'Error inserting product' });
+                    });
+                }
+
+                //เพิ่มแจ้งเตือนหลังจากเพิ่มสินค้า
+                const insertedProductName = productName;
+                const notifyQuery = `
+                    INSERT INTO notifications (user_id, type, message)
+                    VALUES ? 
+                `;
+
+                db.query(`SELECT user_id FROM users WHERE role_id IN (1, 2)`, (err, resultUsers) => {
+                    if (err) {
+                        return db.rollback(() => {
+                            return res.status(500).json({ error: 'Failed to fetch target users for notification' });
+                        });
+                    }
+
+                    const notifications = resultUsers.map(row => [
+                        row.user_id,
+                        'souvenir_request',
+                        `มีคำขอเพิ่มของที่ระลึก: ${insertedProductName}`
+                    ]);
+
+                    if (notifications.length > 0) {
+                        db.query(notifyQuery, [notifications], (err, notifyResult) => {
+                            if (err) {
+                                return db.rollback(() => {
+                                    return res.status(500).json({ error: 'Failed to insert notifications' });
+                                });
+                            }
+
+                            // Commit transaction if everything is successful
+                            db.commit((err) => {
+                                if (err) {
+                                    return db.rollback(() => {
+                                        return res.status(500).json({ error: 'Failed to commit transaction' });
+                                    });
+                                }
+                                return res.status(200).json({ message: 'Product, payment method, and notifications added successfully' });
+                            });
+                        });
+                    } else {
+                        db.commit((err) => {
+                            if (err) {
+                                return db.rollback(() => {
+                                    return res.status(500).json({ error: 'Failed to commit transaction' });
+                                });
+                            }
+                            return res.status(200).json({ message: 'Product and payment method added (no users to notify)' });
+                        });
+                    }
+                });
+            });
         });
     });
 });
+
+
 
 // ดึงตะกร้ามาจ้า
 route.get('/cart', (req, res) => {
@@ -178,22 +339,56 @@ route.get('/cart/count', (req, res) => {
 
 
 // อัพเดตจำนวนสินค้า
-route.put("/cart/update", (req, res) => {
-    const { user_id, product_id, quantity } = req.body;
+route.put('/cart/update', (req, res) => {
+    const { user_id, product_id, quantity, total } = req.body;
 
-    if (!user_id || !product_id || quantity < 1) {
+    if (!user_id || !product_id || quantity < 1 || isNaN(total)) {
         return res.status(400).json({ message: "ข้อมูลไม่ถูกต้อง" });
     }
 
-    const sql = "UPDATE cart SET quantity = ? WHERE user_id = ? AND product_id = ?";
-    db.query(sql, [quantity, user_id, product_id], (err, result) => {
-        if (err) {
-            console.error("Error updating cart:", err);
-            return res.status(500).json({ message: "เกิดข้อผิดพลาด" });
-        }
-        res.json({ message: "อัปเดตจำนวนสินค้าเรียบร้อย" });
+    // เริ่ม Transaction
+    db.beginTransaction(err => {
+        if (err) return res.status(500).send("ไม่สามารถเริ่ม transaction");
+
+        // ดึง stock ปัจจุบัน
+        const stockQuery = `SELECT stock FROM products WHERE product_id = ? FOR UPDATE`;
+        db.query(stockQuery, [product_id], (err, stockResult) => {
+            if (err) return db.rollback(() => res.status(500).send("ดึง stock ผิดพลาด"));
+
+            const stock = stockResult[0]?.stock || 0;
+            if (stock < quantity) {
+                return db.rollback(() => res.status(400).send("จำนวนสินค้าไม่พอในคลัง"));
+            }
+
+            // ตรวจสอบจำนวนสินค้าเดิมใน cart
+            const checkCartQuery = `SELECT quantity FROM cart WHERE user_id = ? AND product_id = ?`;
+            db.query(checkCartQuery, [user_id, product_id], (err, cartResult) => {
+                if (err) return db.rollback(() => res.status(500).send("ตรวจสอบ cart ผิดพลาด"));
+
+                const prevQty = cartResult[0]?.quantity || 0;
+                const diff = quantity - prevQty;
+
+                // อัปเดตจำนวนใน cart
+                const updateCart = `UPDATE cart SET quantity = ?, total = ? WHERE user_id = ? AND product_id = ?`;
+                db.query(updateCart, [quantity, total, user_id, product_id], (err) => {
+                    if (err) return db.rollback(() => res.status(500).send("อัปเดต cart ผิดพลาด"));
+
+                    // อัปเดต stock
+                    const updateStock = `UPDATE products SET stock = stock - ? WHERE product_id = ?`;
+                    db.query(updateStock, [diff, product_id], (err) => {
+                        if (err) return db.rollback(() => res.status(500).send("อัปเดต stock ผิดพลาด"));
+
+                        db.commit(err => {
+                            if (err) return db.rollback(() => res.status(500).send("commit ผิดพลาด"));
+                            res.json({ message: "อัปเดตจำนวนสินค้าในตะกร้าสำเร็จ" });
+                        });
+                    });
+                });
+            });
+        });
     });
 });
+
 
 // เพิ่มจำนวนสินค้า
 route.post('/cart/add', (req, res) => {
@@ -203,43 +398,112 @@ route.post('/cart/add', (req, res) => {
         return res.status(400).send("ข้อมูลไม่ครบถ้วนหรือค่าผิดพลาด");
     }
 
-    const query = `UPDATE cart SET quantity = ?, total = ? WHERE user_id = ? AND product_id = ?`;
+    // เริ่ม Transaction
+    db.beginTransaction(err => {
+        if (err) return res.status(500).send("ไม่สามารถเริ่ม transaction");
 
-    db.query(query, [quantity, total, user_id, product_id], (err, result) => {
-        if (err) {
-            console.error("Error updating cart:", err);
-            return res.status(500).send("Error updating cart");
-        }
+        // ดึง stock ปัจจุบัน
+        const stockQuery = `SELECT stock FROM products WHERE product_id = ? FOR UPDATE`;
+        db.query(stockQuery, [product_id], (err, stockResult) => {
+            if (err) return db.rollback(() => res.status(500).send("ดึง stock ผิดพลาด"));
 
-        if (result.affectedRows === 0) {
-            const insertQuery = `INSERT INTO cart (user_id, product_id, quantity, total) VALUES (?, ?, ?, ?)`;
-            db.query(insertQuery, [user_id, product_id, quantity, total], (err, result) => {
-                if (err) {
-                    console.error("Error inserting into cart:", err);
-                    return res.status(500).send("Error adding to cart");
+            const stock = stockResult[0]?.stock || 0;
+            if (stock < quantity) {
+                return db.rollback(() => res.status(400).send("จำนวนสินค้าไม่พอในคลัง"));
+            }
+
+            // ตรวจว่ามีใน cart แล้วหรือไม่
+            const checkCartQuery = `SELECT quantity FROM cart WHERE user_id = ? AND product_id = ?`;
+            db.query(checkCartQuery, [user_id, product_id], (err, cartResult) => {
+                if (err) return db.rollback(() => res.status(500).send("ตรวจสอบ cart ล้มเหลว"));
+
+                let diff = quantity;
+                if (cartResult.length > 0) {
+                    const prevQty = cartResult[0].quantity;
+                    diff = quantity - prevQty;
+
+                    const updateCart = `UPDATE cart SET quantity = ?, total = ? WHERE user_id = ? AND product_id = ?`;
+                    db.query(updateCart, [quantity, total, user_id, product_id], (err) => {
+                        if (err) return db.rollback(() => res.status(500).send("อัปเดต cart ล้มเหลว"));
+
+                        const updateStock = `UPDATE products SET stock = stock - ? WHERE product_id = ?`;
+                        db.query(updateStock, [diff, product_id], (err) => {
+                            if (err) return db.rollback(() => res.status(500).send("อัปเดต stock ล้มเหลว"));
+
+                            db.commit(err => {
+                                if (err) return db.rollback(() => res.status(500).send("commit ล้มเหลว"));
+                                res.json({ message: "อัปเดตตะกร้าสำเร็จ", updateCart: true });
+                            });
+                        });
+                    });
+                } else {
+                    // เพิ่มใหม่
+                    const insertCart = `INSERT INTO cart (user_id, product_id, quantity, total) VALUES (?, ?, ?, ?)`;
+                    db.query(insertCart, [user_id, product_id, quantity, total], (err) => {
+                        if (err) return db.rollback(() => res.status(500).send("เพิ่มตะกร้าล้มเหลว"));
+
+                        const updateStock = `UPDATE products SET stock = stock - ? WHERE product_id = ?`;
+                        db.query(updateStock, [quantity, product_id], (err) => {
+                            if (err) return db.rollback(() => res.status(500).send("อัปเดต stock ล้มเหลว"));
+
+                            db.commit(err => {
+                                if (err) return db.rollback(() => res.status(500).send("commit ล้มเหลว"));
+                                res.json({ message: "เพิ่มสินค้าสำเร็จ", updateCart: true });
+                            });
+                        });
+                    });
                 }
-                res.json({ message: "เพิ่มสินค้าเข้าตะกร้าแล้ว!", updateCart: true });
             });
-        } else {
-            res.json({ message: "ตะกร้าของคุณถูกอัปเดตแล้ว!", updateCart: true });
-        }
+        });
     });
 });
+
 
 // สำหรับลบสินค้าในตะกร้า
 route.delete('/cart/:productId', (req, res) => {
     const { productId } = req.params;
-    const deleteQuery = 'DELETE FROM cart WHERE product_id = ?';
+    const { userId } = req.body;
 
-    db.query(deleteQuery, [productId], (err, results) => {
-        if (err) {
-            console.error("Error deleting item:", err);
-            return res.status(500).json({ error: "Error deleting item from cart" });
-        }
+    if (!userId) {
+        return res.status(400).json({ message: "ต้องการ user_id" });
+    }
 
-        res.status(200).json({ message: "Item deleted from cart" });
+    // เริ่ม Transaction
+    db.beginTransaction(err => {
+        if (err) return res.status(500).send("ไม่สามารถเริ่ม transaction");
+
+        // ดึงข้อมูลสินค้าใน cart และ stock ปัจจุบัน
+        const cartQuery = `SELECT quantity FROM cart WHERE user_id = ? AND product_id = ?`;
+        db.query(cartQuery, [userId, productId], (err, cartResult) => {
+            if (err) return db.rollback(() => res.status(500).send("ดึง cart ผิดพลาด"));
+
+            if (cartResult.length === 0) {
+                return db.rollback(() => res.status(404).send("ไม่พบสินค้าในตะกร้า"));
+            }
+
+            const quantity = cartResult[0].quantity;
+
+            // ลบสินค้าใน cart
+            const deleteQuery = `DELETE FROM cart WHERE user_id = ? AND product_id = ?`;
+            db.query(deleteQuery, [userId, productId], (err) => {
+                if (err) return db.rollback(() => res.status(500).send("ลบสินค้าใน cart ผิดพลาด"));
+
+                // อัปเดต stock
+                const updateStockQuery = `UPDATE products SET stock = stock + ? WHERE product_id = ?`;
+                db.query(updateStockQuery, [quantity, productId], (err) => {
+                    if (err) return db.rollback(() => res.status(500).send("อัปเดต stock ผิดพลาด"));
+
+                    db.commit(err => {
+                        if (err) return db.rollback(() => res.status(500).send("commit ผิดพลาด"));
+                        res.json({ message: "ลบสินค้าออกจากตะกร้าเรียบร้อยแล้ว" });
+                    });
+                });
+            });
+        });
     });
 });
+
+
 
 // จ่ายเงิน
 route.post('/checkout', async (req, res) => {

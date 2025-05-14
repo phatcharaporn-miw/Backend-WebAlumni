@@ -17,10 +17,20 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage: storage });
 
+const bannedWords = ["ควย", "สัส"];
+
 // สร้างกระทู้
 router.post('/create-post', upload.single("image"), (req, res) => {
   const { title, category_id, content, startDate } = req.body;
   const userId = req.session.user?.id; // ดึง user_id จาก session
+
+  // ตรวจสอบคำต้องห้าม
+  const regex = new RegExp(bannedWords.join("|"), "i"); // ใช้ RegExp เพื่อตรวจสอบคำต้องห้ามไม่สนใจตัวพิมพ์เล็ก-ใหญ่
+  if (regex.test(content)) {
+    const bannedWord = bannedWords.find(word => content.includes(word));
+    return res.status(400).json({ error: `เนื้อหาของกระทู้มีคำที่ต้องห้าม: ${bannedWord}` });
+  }
+
 
   const imagePath = req.file ? `/uploads/${req.file.filename}` : null;
 
@@ -34,10 +44,11 @@ router.post('/create-post', upload.single("image"), (req, res) => {
       console.error("เกิดข้อผิดพลาดในการสร้างกระทู้:", err);
       return res.status(500).json({ success: false, message: "Database error" });
     }
-    
-    logWebboard(userId, webboard_id, 'สร้างกระทู้');
+     
+    const webboardId = results.insertId;
+    logWebboard(userId, webboardId, 'สร้างกระทู้');
 
-    console.log("กระทู้ถูกสร้างสำเร็จ, webboard_id:", results.insertId);
+    console.log("กระทู้ถูกสร้างสำเร็จ, webboard_id:", webboardId);
     res.status(200).json({ success: true, message: "กระทู้ถูกสร้างเรียบร้อย", webboard_id: results.insertId });
   });
 })
@@ -586,7 +597,6 @@ router.post('/webboard/:postId/favorite', LoggedIn, checkActiveUser, (req, res) 
       }
 
       // console.log('Favorite posts:', results);
-
       
     if (results.length === 0) {
       return res.json({ success: false, message: 'ไม่พบกระทู้' });

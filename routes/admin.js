@@ -737,6 +737,23 @@ router.get('/dashboard-stats', (req, res) => {
     });
 });
 
+router.get('/notification-counts', (req, res) => {
+    const query1 = `SELECT COUNT(*) AS count FROM donationproject WHERE status = 0`;
+    const query2 = `SELECT COUNT(*) AS count FROM products WHERE status = "0"`;
+
+    db.query(query1, (err, result1) => {
+        if (err) return res.status(500).json({ error: 'Query error 1' });
+
+        db.query(query2, (err, result2) => {
+            if (err) return res.status(500).json({ error: 'Query error 2' });
+
+            res.json({
+                donationRequests: result1[0].count,
+                souvenirRequests: result2[0].count
+            });
+        });
+    });
+});
 
 
 
