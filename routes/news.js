@@ -99,7 +99,7 @@ router.get('/news-all',(req, res) => {
         return res.status(500).json({ success: false, message: 'Database error' });
       }
      
-      res.json({ success: true, data: results });
+      res.json({ success: true, data: results,  });
     });
 });
 
@@ -107,38 +107,59 @@ router.get('/news-all',(req, res) => {
 router.get('/news-id/:newsId', (req, res) => {
   const { newsId } = req.params;
 
-  const queryNewsId = `
-      SELECT 
-        news.news_id, 
-        news.title, 
-      (
-        SELECT news_image.image_path 
-        FROM news_image 
-        WHERE news_image.news_id = news.news_id 
-        LIMIT 1
-      ) AS image_path, 
-        news.content, 
-        news.created_at, 
-        users.user_id, 
-        profiles.full_name AS role_posted
-      FROM news
-      JOIN users ON news.user_id = users.user_id
-      JOIN profiles ON profiles.user_id = users.user_id
-      WHERE news.news_id = ?
-    `;
+  // ดึงข่าวหลัก
+  const queryNews = `
+    SELECT 
+      news.news_id, 
+      news.title, 
+      news.content, 
+      news.created_at, 
+      users.user_id, 
+      profiles.full_name AS role_posted
+    FROM news
+    JOIN users ON news.user_id = users.user_id
+    JOIN profiles ON profiles.user_id = users.user_id
+    WHERE news.news_id = ?
+  `;
 
-    db.query(queryNewsId, [newsId], (err, results) => {
-      if (err) {
-        console.error('เกิดข้อผิดพลาดในการดึงข่าวประชาสัมพันธ์:', err);
+  // ดึงภาพทั้งหมดของข่าวนี้
+  const queryImages = `
+    SELECT image_path FROM news_image WHERE news_id = ?
+  `;
+
+  db.query(queryNews, [newsId], (err, newsResults) => {
+    if (err) {
+      console.error('เกิดข้อผิดพลาดในการดึงข่าว:', err);
+      return res.status(500).json({ success: false, message: 'Database error' });
+    }
+
+    if (newsResults.length === 0) {
+      return res.status(404).json({ success: false, message: 'ไม่พบข่าว' });
+    }
+
+    const newsData = newsResults[0];
+
+    db.query(queryImages, [newsId], (err2, imageResults) => {
+      if (err2) {
+        console.error('เกิดข้อผิดพลาดในการดึงภาพข่าว:', err2);
         return res.status(500).json({ success: false, message: 'Database error' });
       }
 
-      if (results.length === 0) {
-        return res.status(404).json({ success: false, message: 'ไม่พบข่าวประชาสัมพันธ์' });
-      }
+      const images = imageResults.map(img => img.image_path);
 
-    res.json({ success: true, data: results[0], newsTitle: results[0].title}); });
+      res.json({
+        success: true,
+        data: {
+          ...newsData,
+          images,
+        },
+        newsTitle: newsData.title 
+      });
     });
+  });
+});
+
+
 
 // แก้ไขข่าวประชาสัมพันธ์
 router.put('/edit-news/:newsId', LoggedIn, checkActiveUser, upload.array('images'), (req, res) => {

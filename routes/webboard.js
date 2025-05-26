@@ -17,12 +17,12 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage: storage });
 
-const bannedWords = ["ควย", "สัส"];
+const bannedWords = ["ควย", "คำหยาบ"];
 
 // สร้างกระทู้
 router.post('/create-post', upload.single("image"), (req, res) => {
   const { title, category_id, content, startDate } = req.body;
-  const userId = req.session.user?.id; // ดึง user_id จาก session
+  const userId = req.session.user?.id; 
 
   // ตรวจสอบคำต้องห้าม
   const regex = new RegExp(bannedWords.join("|"), "i"); // ใช้ RegExp เพื่อตรวจสอบคำต้องห้ามไม่สนใจตัวพิมพ์เล็ก-ใหญ่
@@ -559,6 +559,7 @@ router.post('/webboard/:postId/favorite', LoggedIn, checkActiveUser, (req, res) 
                                 return res.status(500).json({ success: false, message: 'Database error' });
                             }
 
+                            logWebboard(userId, postId, 'กดถูกใจกระทู้');
                             res.json({ success: true, message: 'เพิ่มลงในรายการถูกใจและสร้างการแจ้งเตือนสำเร็จ', status: 1 });
                         });
                     });

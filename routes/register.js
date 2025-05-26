@@ -13,12 +13,9 @@ function validatePassword(password) {
 }
 
 // การตั้งค่า multer สำหรับการอัปโหลดไฟล์
-// การตั้งค่า multer สำหรับการอัปโหลดไฟล์
 const upload = multer({
     storage: multer.diskStorage({
         destination: (req, file, cb) => {
-            // เก็บไฟล์ในโฟลเดอร์ img ที่อยู่ใน root ของโปรเจกต์
-            cb(null, path.join(__dirname, '..', 'img'));
             // เก็บไฟล์ในโฟลเดอร์ img ที่อยู่ใน root ของโปรเจกต์
             cb(null, path.join(__dirname, '..', 'img'));
         },
@@ -29,19 +26,15 @@ const upload = multer({
     }),
     fileFilter: (req, file, cb) => {
         // ตรวจสอบว่าไฟล์ที่อัปโหลดเป็นไฟล์รูปภาพหรือไม่
-        // ตรวจสอบว่าไฟล์ที่อัปโหลดเป็นไฟล์รูปภาพหรือไม่
         if (file.mimetype.startsWith('image/')) {
-            cb(null, true);
             cb(null, true);
         } else {
             cb(new Error('กรุณาอัปโหลดไฟล์รูปภาพเท่านั้น'), false);
         }
     },
     limits: { fileSize: 5 * 1024 * 1024 },  // จำกัดขนาดไฟล์ 5MB
-    limits: { fileSize: 5 * 1024 * 1024 },  // จำกัดขนาดไฟล์ 5MB
 });
 
-// Route สำหรับลงทะเบียนผู้ใช้ใหม่
 // Route สำหรับลงทะเบียนผู้ใช้ใหม่
 router.post('/register', upload.single('image_path'), async (req, res) => {
     console.log(req.body);
@@ -63,8 +56,8 @@ router.post('/register', upload.single('image_path'), async (req, res) => {
         degree
     } = req.body;
         
-    const image_path = req.file ? req.file.path.replace(/\\/g, '/') : null;        
-    console.log('Image Path:', image_path);
+    const image_path = `/img/${req.file.filename}`;        
+    // console.log('Image Path:', image_path);
 
      // ตรวจสอบรูปแบบรหัสผ่าน
     if (!validatePassword(password)) {
@@ -83,17 +76,13 @@ router.post('/register', upload.single('image_path'), async (req, res) => {
         }
 
         // สร้าง hash ของรหัสผ่าน
-
-        // สร้าง hash ของรหัสผ่าน
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // สร้างข้อมูลผู้ใช้ในตาราง users
         // สร้างข้อมูลผู้ใช้ในตาราง users
         const queryUser = 'INSERT INTO users (role_id, created_at, updated_at) VALUES (?, NOW(), NOW())';
         const [userResult] = await db.promise().query(queryUser, [role]);
         const user_id = userResult.insertId;
 
-        // เพิ่มข้อมูลในตาราง login
         // เพิ่มข้อมูลในตาราง login
         const queryLogin = 'INSERT INTO login (user_id, username, password) VALUES (?, ?, ?)';
         await db.promise().query(queryLogin, [user_id, username, hashedPassword]);
@@ -101,18 +90,35 @@ router.post('/register', upload.single('image_path'), async (req, res) => {
         if (parseInt(role) === 1 || parseInt(role) === 2 || parseInt(role) === 4) {
             // ลงข้อมูล profiles เฉพาะ role 1,2,4
             const queryProfile = `
-                INSERT INTO profiles (user_id, full_name, email, image_path)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO profiles (user_id, full_name, title, email, image_path)
+                VALUES (?, ?, ?, ?, ?)
             `;
             await db.promise().query(queryProfile, [
                 user_id,
-                full_name ,
-                email ,
-                image_path 
+                full_name,
+                title,
+                email,
+                image_path
             ]);
-        
             console.log('เพิ่มข้อมูลใน profiles สำเร็จ');
-        
+
+            const educations = JSON.parse(req.body.education || '[]');
+            if (parseInt(role) === 4 && educations.length > 0) {
+                const edu = educations[0]; // สมมุติว่า role 4 มีแค่ 1 รายการ
+                const queryEducation = `
+                    INSERT INTO educations (user_id, degree_id, studentId, major_id, student_year)
+                    VALUES (?, ?, ?, ?, ?)
+                `;
+                await db.promise().query(queryEducation, [
+                    user_id,
+                    edu.degree || null,
+                    edu.studentId || null,
+                    edu.major || null,
+                    edu.student_year || null
+                ]);
+                console.log('เพิ่มข้อมูล education สำหรับ role 4 สำเร็จ');
+            }
+
         } else if (parseInt(role) === 3) {
             // ลงข้อมูล profile + alumni + educations สำหรับ role 3
             const queryProfile = `

@@ -27,7 +27,8 @@ router.get('/major/:major', (req, res) => {
     FROM educations
     JOIN profiles ON educations.user_id = profiles.user_id
     JOIN major ON educations.major_id = major.major_id
-    WHERE major.major_name = ?
+    JOIN users ON educations.user_id = users.user_id
+    WHERE major.major_name = ? AND users.role_id = 3
   `;
 
   db.query(query, [majorName], (err, results) => {
@@ -183,7 +184,7 @@ router.get('/:userId', (req, res) => {
           userInfo.activities = actResults || [];
           userInfo.posts = postResults || [];
 
-        res.status(200).json({ success: true, data: userInfo });
+        res.status(200).json({ success: true, data: userInfo, fullName: userInfo.full_name  });
         });
      });
     });

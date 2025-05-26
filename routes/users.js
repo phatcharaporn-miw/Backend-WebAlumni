@@ -4,18 +4,33 @@ var db = require('../db');
 var { LoggedIn, checkActiveUser } = require('../middlewares/auth');
 var bcrypt = require('bcrypt');
 var multer = require('multer');
+const path = require('path');
 const { logWebboard }= require('../logUserAction'); 
 
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, 'uploads/');
+// การตั้งค่า multer สำหรับการอัปโหลดไฟล์
+const upload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => {
+            // เก็บไฟล์ในโฟลเดอร์ img ที่อยู่ใน root ของโปรเจกต์
+            cb(null, path.join(__dirname, '..', 'img'));
+        },
+        filename: (req, file, cb) => {
+            // ใช้ชื่อไฟล์เดิม
+            cb(null, file.originalname);
+        },
+    }),
+    fileFilter: (req, file, cb) => {
+        // ตรวจสอบว่าไฟล์ที่อัปโหลดเป็นไฟล์รูปภาพหรือไม่
+        if (file.mimetype.startsWith('image/')) {
+            cb(null, true);
+        } else {
+            cb(new Error('กรุณาอัปโหลดไฟล์รูปภาพเท่านั้น'), false);
+        }
     },
-    filename: (req, file, cb) => {
-        cb(null, file.originalname);
-    }
+    limits: { fileSize: 5 * 1024 * 1024 },  // จำกัดขนาดไฟล์ 5MB
 });
 
-const upload = multer({ storage: storage });
+
 
 router.get('/profile', LoggedIn, checkActiveUser, (req, res) => {
   if (!req.session.user || !req.session.user.id) {
@@ -56,7 +71,8 @@ router.get('/profile', LoggedIn, checkActiveUser, (req, res) => {
           educations.major_id,
           major.major_name AS education_major_name,
           educations.studentId,
-          educations.graduation_year
+          educations.graduation_year,
+          educations.student_year
       FROM educations
       LEFT JOIN degree ON educations.degree_id = degree.degree_id
       LEFT JOIN major ON educations.major_id = major.major_id
@@ -102,6 +118,7 @@ router.get('/profile', LoggedIn, checkActiveUser, (req, res) => {
                       major_name: edu.education_major_name,
                       studentId: edu.studentId,
                       graduation_year: edu.graduation_year,
+                      student_year: edu.student_year,
                   })),
               },
           });
@@ -144,7 +161,7 @@ router.post('/edit-profile',(req, res) =>{
   // อัปเดตข้อมูลผู้ใช้
   let sql = `
   UPDATE profiles 
-  SET email=?, full_name=?, nick_name=?, title=?, birthday=?, address=?, phone=?, line=?, studentId=?, graduation_year=?, self_description=?
+  SET email=?, full_name=?, nick_name=?, title=?, birthday=?, address=?, phone=?, line=?, self_description=?
   WHERE user_id=?`;
 
   let values = [email,  full_name, nick_name, title, birthday, address, phone, line, studentId, graduation_year, self_description, userId];
@@ -188,6 +205,27 @@ router.post('/edit-profile',(req, res) =>{
     });
   });
 });
+
+// อัปโหลดรูปภาพโปรไฟล์
+router.post('/update-profile-image', upload.single('image_path'), async (req, res) => {
+  const userId = req.body.user_id;
+  const image_path = `img/${req.file.filename}`; 
+
+  if (!userId || !image_path) {
+    return res.status(400).json({ message: 'ข้อมูลไม่ครบถ้วน' });
+  }
+
+  try {
+    const query = 'UPDATE profiles SET image_path = ? WHERE user_id = ?';
+    await db.promise().query(query, [image_path, userId]);
+
+    res.status(200).json({ message: 'อัปเดตรูปสำเร็จ', newImagePath: image_path });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'อัปเดตรูปไม่สำเร็จ' });
+  }
+});
+
 
   //กระทู้ที่เคยสร้าง
   router.get('/webboard-user/:userId', (req, res) => {
