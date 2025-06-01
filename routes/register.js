@@ -49,11 +49,7 @@ router.post('/register', upload.single('image_path'), async (req, res) => {
         birthday,
         address,
         phone,
-        line,
-        major,
-        studentId,
-        graduation_year,
-        degree
+        line
     } = req.body;
         
     const image_path = `/img/${req.file.filename}`;        

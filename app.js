@@ -7,9 +7,9 @@ var logger = require('morgan');
 var QRcode = require('qrcode');
 var generatePayload = require('promptpay-qr');
 var bodyParser = require('body-parser');
-var cors = require('cors');
+const cors = require('cors');
 var passport = require('passport');
-var session = require('express-session');
+const session = require('express-session');
 
 require('dotenv').config();
 
@@ -26,41 +26,30 @@ app.use(express.urlencoded({ extended: false }));
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
+app.set('trust proxy', 1);
 
-
-// app.use(cors({
-//   origin:"http://localhost:3002", // URL ของ Frontend
-//   credentials: true, 
-// }));
-
-const allowedOrigins = ["http://localhost:3001", "http://localhost:3002"];
+const allowedOrigins = "http://localhost:3002";
 
 app.use(cors({
-  origin: function (origin, callback) {
-    // ถ้าไม่มี origin (เช่น จาก Postman) หรืออยู่ใน whitelist
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error("Not allowed by CORS"));
-    }
-  },
+  origin: allowedOrigins,
   credentials: true,
 }));
 
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use('/img', express.static('img'));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 app.use(session({
   secret: process.env.SESSION_SECRET,
   resave: false,
-  saveUninitialized: true,
-  cookie: { 
+  saveUninitialized: false,
+  cookie: {
     secure: false,
     httpOnly: true,
-    // หากใช้ HTTPS ให้เปลี่ยนเป็น true
+    maxAge: 1000 * 60 * 60 // 1 ชั่วโมง
   }
 }));
-
 
 app.use(passport.initialize());
 app.use(passport.session());

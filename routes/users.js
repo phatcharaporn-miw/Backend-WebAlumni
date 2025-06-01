@@ -5,7 +5,9 @@ var { LoggedIn, checkActiveUser } = require('../middlewares/auth');
 var bcrypt = require('bcrypt');
 var multer = require('multer');
 const path = require('path');
-const { logWebboard }= require('../logUserAction'); 
+const { logWebboard }= require('../logUserAction');
+const util = require('util'); // เพิ่มบนสุดของไฟล์
+const dbQuery = util.promisify(db.query).bind(db); // แปลง db.query เป็น promise 
 
 // การตั้งค่า multer สำหรับการอัปโหลดไฟล์
 const upload = multer({
@@ -66,6 +68,7 @@ router.get('/profile', LoggedIn, checkActiveUser, (req, res) => {
   // ดึงข้อมูล educations ของ user
   const educationQuery = `
       SELECT 
+          educations.education_id,
           educations.degree_id,
           degree.degree_name,
           educations.major_id,
@@ -112,6 +115,7 @@ router.get('/profile', LoggedIn, checkActiveUser, (req, res) => {
                   profilePicture: `http://localhost:3001/${userProfile.image_path}`,
                   role: userProfile.role_id,
                   educations: educationResults.map(edu => ({
+                      education_id: edu.education_id,
                       degree: edu.degree_id,
                       degree_name: edu.degree_name,
                       major: edu.major_id,
@@ -148,63 +152,149 @@ router.get('/login-info', LoggedIn, checkActiveUser,(req, res) => {
 });
 
 //ส่วนของการแก้ไขข้อมูลส่วนตัว
-router.post('/edit-profile',(req, res) =>{
-  // console.log('ข้อมูลที่ได้รับจาก Frontend:', req.body);
-  const { password, email, full_name, nick_name, title, birthday, address, phone, line,studentId, graduation_year, degree, self_description} = req.body;
-  //const userId = req.session.user?.id; 
-  const userId = req.session.user.id || null;
+router.post('/edit-profile', (req, res) => {
+  const {
+    password, email, full_name, nick_name, title,
+    birthday, address, phone, line, self_description,
+    major, educations
+  } = req.body;
 
-  if (!userId) {
-    return res.status(400).json({message: "ไมพบไอดีของผู้ใช้งานคนนี้"})
+  if (!req.session.user || !req.session.user.id) {
+      return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
   }
 
-  // อัปเดตข้อมูลผู้ใช้
-  let sql = `
-  UPDATE profiles 
-  SET email=?, full_name=?, nick_name=?, title=?, birthday=?, address=?, phone=?, line=?, self_description=?
-  WHERE user_id=?`;
+  const userId = req.session.user.id;
 
-  let values = [email,  full_name, nick_name, title, birthday, address, phone, line, studentId, graduation_year, self_description, userId];
+  const profileSql = `
+    UPDATE profiles SET 
+      email = ?, full_name = ?, nick_name = ?, title = ?, 
+      birthday = ?, address = ?, phone = ?, line = ?, self_description = ?
+    WHERE user_id = ?`;
+  const profileValues = [
+    email || null, full_name || null, nick_name || null, title || null,
+    birthday || null, address || null, phone || null, line || null,
+    self_description || null, userId
+  ];
 
-  db.query(sql, values, (err) =>{
+  db.query(profileSql, profileValues, (err) => {
     if (err) {
-      console.error('เกิดข้อผิดพลาด:', err);
-      return res.status(500).json({ success: false, message: 'เกิดข้อผิดพลาดในการแก้ไขข้อมูลส่วนตัว' });
+      console.error('เกิดข้อผิดพลาดในการอัปเดต profiles:', err);
+      return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการอัปเดต profiles' });
     }
-    
-      // // ถ้าผู้ใช้ไม่ได้เปลี่ยนรหัสผ่าน
-      // if (!password) {
-      //   return res.json({ success: true, message: "แก้ไขข้อมูลส่วนตัวสำเร็จ" });
-      // }
 
-    //เปลี่ยนรหัสผ่าน
+    // ถ้ามีรหัสผ่านใหม่
     if (password) {
       bcrypt.hash(password, 10, (err, hashedPassword) => {
         if (err) {
-          console.error('เกิดข้อผิดพลาดในการเข้ารหัสผ่าน:', err);
-          return res.status(500).json({ success: false, message: 'เกิดข้อผิดพลาดในการแก้ไขรหัสผ่าน' });
+          console.error('เกิดข้อผิดพลาดในการเข้ารหัส:', err);
+          return res.status(500).json({ message: 'ไม่สามารถเข้ารหัสผ่านได้' });
         }
 
-        db.query(`UPDATE users SET password=? WHERE user_id=?`, [hashedPassword, userId], (err) =>{
+        db.query('UPDATE users SET password = ? WHERE user_id = ?', [hashedPassword, userId], (err) => {
           if (err) {
-            console.error('เกิดข้อผิดพลาด:', err);
-            return res.status(500).json({ success: false, message: 'เกิดข้อผิดพลาดในการแก้ไขรหัสผ่าน' });
+            console.error('เกิดข้อผิดพลาดในการอัปเดตรหัสผ่าน:', err);
+            return res.status(500).json({ message: 'อัปเดตรหัสผ่านไม่สำเร็จ' });
+          }
+          // ถัดไปอัปเดต major และ educations หลังจากอัปเดตรหัสผ่านเสร็จ
+          updateMajorAndEducations();
+        });
+      });
+    } else {
+      // ถ้าไม่มีเปลี่ยนรหัสผ่านก็อัปเดต major และ educations ต่อเลย
+      updateMajorAndEducations();
+    }
+
+    function updateMajorAndEducations() {
+      if (major) {
+        db.query('UPDATE alumni SET major_id = ? WHERE user_id = ?', [major, userId], (err) => {
+          if (err) {
+            console.error('เกิดข้อผิดพลาดในการอัปเดต major:', err);
+            return res.status(500).json({ message: 'ไม่สามารถอัปเดต major ได้' });
+          }
+        });
+      }
+
+      if (!Array.isArray(educations) || educations.length === 0) {
+        return res.json({ success: true, message: 'แก้ไขข้อมูลสำเร็จ' });
+      }
+
+      const role_id = req.session.user.userRole;
+
+      const promises = educations.map((edu) => {
+        const {
+          education_id, degree, major: eduMajor, studentId,
+          graduation_year, student_year
+        } = edu;
+
+      const gradYear = graduation_year?.trim() || null;
+      const studYear = student_year?.trim() || null;
+
+      if (education_id) {
+      let updateSql = `
+        UPDATE educations SET 
+          degree_id = ?, major_id = ?, studentId = ?, graduation_year = ?, student_year = ?`;
+
+      let updateValues = [degree || null, eduMajor || null, studentId || null, gradYear, studYear];
+
+      if (parseInt(role_id) === 4) {
+        updateSql += `, student_year = ?`;
+        updateValues.push(studYear);
+      }
+
+      updateSql += ` WHERE education_id = ? AND user_id = ?`;
+      updateValues.push(education_id, userId);
+      
+      // console.log('SQL:', updateSql);
+      // console.log('VALUES:', updateValues);
+      
+      return new Promise((resolve, reject) => {
+        db.query(updateSql, updateValues, (err) => {
+          if (err) {
+            console.error('เกิดข้อผิดพลาดในการอัปเดต education:', err);
+            reject(err);
+          } else {
+            resolve();
           }
         });
       });
-    }
+    }else {
+          // INSERT ต้อง return new Promise ด้วยเช่นกัน
+          return new Promise((resolve, reject) => {
+            const insertSql = `
+              INSERT INTO educations 
+                (user_id, degree_id, major_id, studentId, graduation_year${parseInt(role_id) === 4 ? ', student_year' : ''})
+              VALUES (?, ?, ?, ?, ?${parseInt(role_id) === 4 ? ', ?' : ''})`;
 
-    const { major } = req.body;
-    const sqlUpdateMajor = `UPDATE alumni SET major_id=? WHERE user_id=?`;
-    db.query(sqlUpdateMajor, [major, userId], (err) => {
-        if (err) {
-            console.error("เกิดข้อผิดพลาดในการอัปเดต major:", err);
-            return res.status(500).json({ success: false, message: "เกิดข้อผิดพลาดในการอัปเดต major" });
+            const insertValues = parseInt(role_id) === 4
+              ? [userId, degree || null, eduMajor || null, studentId || null, gradYear || null, studYear || null]
+              : [userId, degree || null, eduMajor || null, studentId || null, gradYear || null];
+
+              console.log('SQL:', insertSql);
+              console.log('VALUES:', insertValues);
+
+            db.query(insertSql, insertValues, (err) => {
+              if (err) {
+                console.error('เกิดข้อผิดพลาดในการเพิ่ม education:', err);
+                reject(err);
+              } else {
+                resolve();
+              }
+            });
+          });
         }
-        return res.json({ success: true, message: "แก้ไขข้อมูลส่วนตัวสำเร็จ" });
-    });
+      });
+
+      Promise.all(promises)
+        .then(() => {
+          res.json({ success: true, message: 'แก้ไขข้อมูลสำเร็จ' });
+        })
+        .catch(() => {
+          res.status(500).json({ message: 'เกิดข้อผิดพลาดในการแก้ไขข้อมูลการศึกษา' });
+        });
+    }
   });
 });
+
 
 // อัปโหลดรูปภาพโปรไฟล์
 router.post('/update-profile-image', upload.single('image_path'), async (req, res) => {

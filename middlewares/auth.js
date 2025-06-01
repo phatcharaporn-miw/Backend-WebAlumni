@@ -1,6 +1,6 @@
 
 const LoggedIn = (req, res, next) => {
-  console.log(" Session in LoggedIn middleware:", req.session);
+  // console.log(" Session in LoggedIn middleware:", req.session);
   if (!req.session || !req.session.user) {
     console.log("Session user not found:", req.session);
     return res.status(401).json({ success: false, message: "กรุณาเข้าสู่ระบบ" });

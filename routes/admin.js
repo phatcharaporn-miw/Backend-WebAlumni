@@ -235,50 +235,72 @@ router.put('/updateSouvenir/:id', (req, res) => {
     });
 });
 
+// การอนุมัติสินค้า
 router.put('/approveSouvenir/:productId', (req, res) => {
     const productId = req.params.productId;
+    const approverId = req.body.approver_id;
+    const action = req.body.action || 'approved';
 
-    if (!productId) {
-        return res.status(400).json({ error: 'Product ID is required' });
+    if (!productId || !approverId) {
+        return res.status(400).json({ error: 'Product ID and Approver ID are required' });
     }
 
-    // ดึงข้อมูลก่อน
     const getProductQuery = 'SELECT product_name, user_id FROM products WHERE product_id = ?';
     db.query(getProductQuery, [productId], (err, productResult) => {
-        if (err) {
-            console.error('Error fetching product information:', err);
-            return res.status(500).json({ error: 'Database error while fetching product' });
-        }
+        if (err) return res.status(500).json({ error: 'Database error (product)' });
+        if (productResult.length === 0) return res.status(404).json({ error: 'Product not found' });
 
-        if (productResult.length === 0) {
-            return res.status(404).json({ error: 'Product not found' });
-        }
+        const { product_name: productName, user_id: ownerId } = productResult[0];
 
-        const productName = productResult[0].product_name;
-        const userId = productResult[0].user_id;
+        const getApproverQuery = `
+            SELECT profiles.full_name, role.role_name 
+            FROM users
+            JOIN profiles ON users.user_id = profiles.user_id
+            JOIN role ON users.role_id = role.role_id
+            WHERE users.user_id = ?
+        `;
+        db.query(getApproverQuery, [approverId], (err, approverResult) => {
+            if (err) return res.status(500).json({ error: 'Database error (approver)' });
+            if (approverResult.length === 0) return res.status(404).json({ error: 'Approver not found' });
 
-        // Update สถานะสินค้า
-        const updateQuery = 'UPDATE products SET status = "1" WHERE product_id = ?';
-        db.query(updateQuery, [productId], (err, result) => {
-            if (err) {
-                console.error('Error updating product status:', err);
-                return res.status(500).json({ error: 'Database error while updating product status' });
-            }
+            const approverName = approverResult[0].full_name;
+            const approverRole = approverResult[0].role_name;
 
-            // บันทึก notification
-            const insertNotification = `
-                INSERT INTO notifications (user_id, type, message, related_id, send_date, status) 
-                VALUES (?, 'approve', ?, ?, NOW(), 'ยังไม่อ่าน')
+            // 🟡 Step 1: Log ก่อน
+            const insertLog = `
+                INSERT INTO product_approval_log (product_id, approver_id, approver_name, approver_role, action)
+                VALUES (?, ?, ?, ?, ?)
             `;
-            const message = `สินค้าของคุณ "${productName}" ได้รับการอนุมัติแล้ว!`;
+            db.query(insertLog, [productId, approverId, approverName, approverRole, action], (err) => {
+                if (err) return res.status(500).json({ error: 'Error logging approval' });
 
-            db.query(insertNotification, [userId, message, productId], (err) => {
-                if (err) {
-                    console.error("Error inserting notification:", err);
-                    return res.status(500).json({ error: 'Error inserting notification' });
-                }
+                // 🔔 Step 2: แจ้งเตือนเจ้าของ
+                const message = action === 'approved'
+                    ? `สินค้าของคุณ "${productName}" ได้รับการอนุมัติแล้ว!`
+                    : `สินค้าของคุณ "${productName}" ถูกปฏิเสธและจะไม่ถูกแสดงบนเว็บไซต์`;
 
-                res.status(200).json({ message: 'Product approved and user notified successfully' });
+                const notifyQuery = `
+                    INSERT INTO notifications (user_id, type, message, related_id, send_date, status) 
+                    VALUES (?, 'approve', ?, ?, NOW(), 'ยังไม่อ่าน')
+                `;
+                db.query(notifyQuery, [ownerId, message, productId], (err) => {
+                    if (err) return res.status(500).json({ error: 'Error sending notification' });
+
+                    // ✅ Step 3: อัปเดตหรือ ลบจริง
+                    if (action === 'approved') {
+                        db.query('UPDATE products SET status = ? WHERE product_id = ?', ['1', productId], (err) => {
+                            if (err) return res.status(500).json({ error: 'Error updating product status' });
+                            return res.status(200).json({ message: 'Product approved and logged' });
+                        });
+                    } else if (action === 'rejected') {
+                        db.query('DELETE FROM products WHERE product_id = ?', [productId], (err) => {
+                            if (err) return res.status(500).json({ error: 'Error deleting rejected product' });
+                            return res.status(200).json({ message: 'Product rejected, logged, and deleted' });
+                        });
+                    } else {
+                        return res.status(400).json({ error: 'Invalid action type' });
+                    }
+                });
             });
         });
     });
@@ -314,13 +336,14 @@ router.put('/editSouvenir/:id', (req, res) => {
     });
 });
 
+// ลบสินค้า
 router.delete('/deleteSouvenir/:id', (req, res) => {
     const productId = req.params.id;
 
      // ดึงข้อมูล product_name และ user_id ของสินค้าที่ถูกลบ
      const getProductQuery = 'SELECT product_name, user_id FROM products WHERE product_id = ?';
      db.query(getProductQuery, [productId], (err, productResult) => {
-         if (err || productResult.length === 0) return res.status(500).json({ error: 'Error fetching product information' });
+        if (err || productResult.length === 0) return res.status(500).json({ error: 'Error fetching product information' });
  
         const productName = productResult[0].product_name;
         const userId = productResult[0].user_id;
@@ -330,7 +353,7 @@ router.delete('/deleteSouvenir/:id', (req, res) => {
             INSERT INTO notifications (user_id, type, message, related_id, send_date, status) 
             VALUES (?, 'delete', ?, ?, NOW(), 'ยังไม่อ่าน')
         `;
-        const message = `สินค้าของคุณ "${productName}" ถูกลบโดยแอดมิน`;
+        const message = `สินค้าของคุณ "${productName}" ถูกลบ`;
         db.query(insertNotification, [userId, message, productId], (err) => {
             if (err) {
                 console.error("Error inserting notification:", err);

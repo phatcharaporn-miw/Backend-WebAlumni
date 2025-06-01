@@ -48,37 +48,31 @@ router.post('/login', (req, res) => {
         id: user.user_id,
         username: user.username,
         role: user.role_id,    
-      };
+      };   
 
        // บันทึก log login
        const ip = req.ip;
        logUserAction(user.user_id, 'login', ip);
+     
+      req.session.save(err => {
+        if (err) {
+          console.error('Session save error:', err);
+          return res.status(500).json({ success: false, message: 'Session error' });
+        }
 
-      // ส่งข้อมูลกลับไปที่ frontend
-      res.json({ 
-        success: true, 
-        message: 'เข้าสู่ระบบสำเร็จ!', 
-        userId: user.user_id, 
-        role: user.role_id,
-        username: user.username,   
-        image_path: user.image_path, 
-      });      
+        // ส่ง response กลับ
+        res.json({ 
+          success: true, 
+          message: 'เข้าสู่ระบบสำเร็จ!', 
+          userId: user.user_id, 
+          role: user.role_id,
+          username: user.username,   
+          image_path: user.image_path, 
+        });
+      });     
     });
   });
 });
-
-//เอาไว้เช็คการ hash password
-// const password = "Admin1234";
-// bcrypt.hash(password, 10, (err, hash) => {
-//   if (err) throw err;
-//   console.log("Hashed password:", hash);
-
-//   const query = 'UPDATE login SET password = ? WHERE username = ?';
-//   db.query(query, [hash, 'admin'], (err, result) => {
-//     if (err) throw err;
-//     console.log('Password updated!');
-//   });
-// }); 
 
 // Logout Route
 router.get('/logout', (req, res) => {
@@ -94,108 +88,130 @@ router.get('/logout', (req, res) => {
   });
 });
 
+// สร้าง transport สำหรับส่งอีเมล
+var transport = nodemailer.createTransport({
+  host: "sandbox.smtp.mailtrap.io",
+  port: 2525,
+  auth: {
+    user: "890a09f6088d79",
+    pass: "1bad5ab925e61b"
+  }
+});
+
+
+//เอาไว้เช็คการ hash password
+// const password = "Admin1234";
+// bcrypt.hash(password, 10, (err, hash) => {
+//   if (err) throw err;
+//   console.log("Hashed password:", hash);
+
+//   const query = 'UPDATE login SET password = ? WHERE username = ?';
+//   db.query(query, [hash, 'admin'], (err, result) => {
+//     if (err) throw err;
+//     console.log('Password updated!');
+//   });
+// }); 
+
 // ลืมรหัสผ่าน
-// router.post('/forgot-password', (req, res) => {
-//   const { email } = req.body;
+const dayjs = require("dayjs");
+const utc = require("dayjs/plugin/utc");
+const timezone = require("dayjs/plugin/timezone");
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
-//   const otp = Math.floor(100000 + Math.random() * 900000); // สร้างรหัส OTP 6 หลัก
+router.post("/forgot-password", (req, res) => {
+  const { email } = req.body;
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  const otpExpiry = dayjs().tz("Asia/Bangkok").add(10, "minute").format("YYYY-MM-DD HH:mm:ss");
 
-//   // ค้นหา user_id จากอีเมลในตาราง profiles
-//   const queryFindUserId = `
-//     SELECT users.user_id 
-//     FROM users
-//     JOIN profiles ON users.user_id = profiles.user_id
-//     WHERE profiles.email = ?
-//   `;
+  console.log("📨 Email ที่รับมา:", email);
+  console.log("🔧 OTP:", otp, "| หมดอายุ:", otpExpiry);
 
-//   db.query(queryFindUserId, [email], (err, results) => {
-//     if (err) {
-//       console.error('Error finding user_id:', err);
-//       return res.status(500).json({ success: false, message: 'Database error while finding user_id' });
-//     }
+  const sql = `
+    SELECT u.user_id FROM users u
+    JOIN profiles p ON u.user_id = p.user_id
+    WHERE p.email = ?
+  `;
 
-//     if (results.length === 0) {
-//       return res.status(404).json({ success: false, message: 'ไม่พบอีเมลในระบบ' });
-//     }
+  db.query(sql, [email], (err, result) => {
+    if (err) return res.status(500).json({ success: false, message: "Database error" });
+    if (!result || result.length === 0) return res.status(400).json({ success: false, message: "ไม่พบอีเมลในระบบ" });
 
-//     const userId = results[0].user_id;
+    const userId = result[0].user_id;
 
-//     // บันทึก OTP ลงในตาราง users
-//     const queryUpdateOtp = `UPDATE users SET otp = ? WHERE user_id = ?`;
-//     db.query(queryUpdateOtp, [otp, userId], (err) => {
-//       if (err) {
-//         console.error('Error updating OTP:', err);
-//         return res.status(500).json({ success: false, message: 'Database error while updating OTP' });
-//       }
+    console.log("📦 จะอัปเดต OTP:", { otp, otpExpiry, userId });
 
-//       // ส่ง OTP ไปยังอีเมล
-//       sendEmail(email, `Your OTP is ${otp}`); // ฟังก์ชันส่งอีเมล
-//       res.json({ success: true, message: "OTP ถูกส่งไปยังอีเมลของคุณแล้ว" });
-//     });
-//   });
-// });
+db.query(
+  `UPDATE users SET otp = ?, otp_expiry = ? WHERE user_id = ?`,
+  [otp, otpExpiry, userId],
+  (err, updateResult) => {
+    if (err) {
+      console.error("❌ อัปเดต OTP ล้มเหลว:", err);
+      return res.status(500).json({ success: false, message: "อัปเดต OTP ไม่สำเร็จ" });
+    }
 
-// // รีเซ็ตรหัสผ่าน
-// router.post('/reset-password', (req, res) => {
-//   const { username, oldPassword, otp, newPassword } = req.body;
+    console.log("✅ OTP ถูกอัปเดตแล้ว:", updateResult);
+        transport.sendMail({
+          from: '"Alumni System" <no-reply@alumni.com>',
+          to: email,
+          subject: "OTP สำหรับรีเซ็ตรหัสผ่าน",
+          html: `<p>รหัส OTP ของคุณคือ: <strong>${otp}</strong> (หมดอายุใน 10 นาที)</p>`,
+        }, (err, info) => {
+          if (err) return res.status(500).json({ success: false, message: "ส่งอีเมลไม่สำเร็จ" });
+          console.log("📤 ส่งอีเมลสำเร็จ:", info.messageId);
+          res.json({ success: true });
+        });
+      }
+    );
+  });
+});
 
-//   // ตรวจสอบว่า username และ otp ถูกต้อง
-//   const queryFindUser = `
-//     SELECT login.*, users.otp 
-//     FROM login
-//     JOIN users ON login.user_id = users.user_id
-//     WHERE login.username = ? AND users.otp = ?
-//   `;
 
-//   db.query(queryFindUser, [username, otp], (err, results) => {
-//     if (err) {
-//       console.error('Database error:', err);
-//       return res.status(500).json({ success: false, message: 'Database error' });
-//     }
+// รีเซ็ตรหัสผ่าน
+router.post("/reset-password", (req, res) => {
+  const { email, otp, newPassword } = req.body;
 
-//     if (results.length === 0) {
-//       return res.status(400).json({ success: false, message: 'OTP หรือชื่อผู้ใช้ไม่ถูกต้อง' });
-//     }
+  const query = `
+    SELECT u.user_id, u.otp, u.otp_expiry FROM users u
+    JOIN profiles p ON u.user_id = p.user_id
+    WHERE p.email = ?
+  `;
 
-//     const user = results[0];
+  db.query(query, [email], (err, results) => {
+    if (err) return res.status(500).json({ success: false, message: "เกิดข้อผิดพลาดภายในระบบ" });
+    if (results.length === 0) return res.status(400).json({ success: false, message: "ไม่พบอีเมล" });
 
-//     // ตรวจสอบรหัสผ่านเก่า
-//     bcrypt.compare(oldPassword, user.password, (err, match) => {
-//       if (err) {
-//         console.error('Error comparing passwords:', err);
-//         return res.status(500).json({ success: false, message: 'Error comparing password' });
-//       }
+    const user = results[0];
+    const storedOtp = user.otp;
+    const otpExpiry = dayjs(user.otp_expiry).tz("Asia/Bangkok");
+    const now = dayjs().tz("Asia/Bangkok");
 
-//       if (!match) {
-//         return res.status(400).json({ success: false, message: 'รหัสผ่านเก่าไม่ถูกต้อง' });
-//       }
+    console.log("🔐 ตรวจ OTP:", {
+      storedOtp,
+      clientOtp: otp,
+      otpExpiry: otpExpiry.format(),
+      now: now.format()
+    });
 
-//       // แฮชรหัสผ่านใหม่
-//       bcrypt.hash(newPassword, 10, (err, hashedPassword) => {
-//         if (err) {
-//           console.error('Error hashing password:', err);
-//           return res.status(500).json({ success: false, message: 'Error hashing password' });
-//         }
+    if (String(storedOtp) !== String(otp).trim() || now.isAfter(otpExpiry)) {
+      return res.status(400).json({ success: false, message: "OTP ไม่ถูกต้องหรือหมดอายุ" });
+    }
 
-//         // อัปเดตรหัสผ่านใหม่และล้าง OTP
-//         const queryUpdatePassword = `
-//           UPDATE login 
-//           JOIN users ON login.user_id = users.user_id
-//           SET login.password = ?, users.otp = NULL
-//           WHERE login.username = ?
-//         `;
 
-//         db.query(queryUpdatePassword, [hashedPassword, username], (err) => {
-//           if (err) {
-//             console.error('Error updating password:', err);
-//             return res.status(500).json({ success: false, message: 'Database error while updating password' });
-//           }
+    bcrypt.hash(newPassword, 10, (err, hashedPassword) => {
+      if (err) return res.status(500).json({ success: false, message: "ไม่สามารถเข้ารหัสรหัสผ่านได้" });
 
-//           res.json({ success: true, message: 'รีเซ็ตรหัสผ่านสำเร็จ' });
-//         });
-//       });
-//     });
-//   });
-// });
+      db.query("UPDATE login SET password = ? WHERE user_id = ?", [hashedPassword, user.user_id], (err) => {
+        if (err) return res.status(500).json({ success: false, message: "ไม่สามารถรีเซ็ตรหัสผ่านได้" });
+
+        db.query("UPDATE users SET otp = NULL, otp_expiry = NULL WHERE user_id = ?", [user.user_id], (err) => {
+          if (err) return res.status(500).json({ success: false, message: "ไม่สามารถล้าง OTP ได้" });
+
+          res.json({ success: true, message: "รีเซ็ตรหัสผ่านสำเร็จ กรุณาเข้าสู่ระบบใหม่" });
+        });
+      });
+    });
+  });
+});
 
 module.exports = router;
