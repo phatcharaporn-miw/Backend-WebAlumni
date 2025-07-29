@@ -10,7 +10,9 @@ var bodyParser = require('body-parser');
 const cors = require('cors');
 var passport = require('passport');
 const session = require('express-session');
+// const schedule = require('./routes/schedule');
 
+require('./routes/schedule');
 require('dotenv').config();
 
 const app = express(); 
@@ -28,12 +30,21 @@ app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 app.set('trust proxy', 1);
 
-const allowedOrigins = "http://localhost:3002";
+const allowedOrigins = ["http://localhost:3002", "http://localhost:3001"];
 
-app.use(cors({
-  origin: allowedOrigins,
+const corsOptions = {
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
-}));
+};
+
+app.use(cors(corsOptions));
+
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -45,11 +56,13 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: false,
-    httpOnly: true,
-    maxAge: 1000 * 60 * 60 // 1 ชั่วโมง
+    secure: process.env.NODE_ENV === "production", // ใช้ HTTPS เท่านั้นใน production
+    httpOnly: true, // ป้องกันการเข้าถึง cookie จาก JS
+    sameSite: 'lax', // หรือ 'strict' เพื่อป้องกัน CSRF
+    maxAge: 1000 * 60 * 60, 
   }
 }));
+
 
 app.use(passport.initialize());
 app.use(passport.session());
@@ -71,14 +84,13 @@ var searchRoute =  require('./routes/search');
 var AdminAllRoute= require('./routes/admin');
 var alumniRoute= require('./routes/alumni');
 var activityRoute = require('./routes/activity'); 
+var ordersRoute = require('./routes/orders');
 
 app.use('/api', indexRouter);
-// app.use('/login', LoginRoute);
 app.use('/users', usersRouter);
 app.use('/add', registerRouter);
-// app.use('/show', aboutRouter);
 app.use('/donate', DonateRoute);
-app.use('/souvenir',SouvenirRoute );
+app.use('/souvenir',SouvenirRoute);
 app.use('/web', webboardRouter);
 app.use('/notice', notificationRoute);
 app.use('/category', categoryRoute);
@@ -86,6 +98,7 @@ app.use('/search', searchRoute);
 app.use('/alumni', alumniRoute);
 app.use('/activity', activityRoute); 
 app.use('/news', NewsRoute);
+app.use('/orders', ordersRoute);
 
 //for admin
 app.use('/admin', AdminAllRoute);

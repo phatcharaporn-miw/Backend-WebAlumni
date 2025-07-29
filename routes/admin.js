@@ -3,9 +3,9 @@ const express = require("express");
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
-const db = require('../db'); 
-var { LoggedIn,checkActiveUser } = require('../middlewares/auth');
-const { logUserAction, logManage }= require('../logUserAction'); 
+const db = require('../db');
+var { LoggedIn, checkActiveUser } = require('../middlewares/auth');
+const { logUserAction, logManage } = require('../logUserAction');
 
 // ตั้งค่า Multer สำหรับอัปโหลดไฟล์
 const storage = multer.diskStorage({
@@ -42,7 +42,7 @@ router.get('/donatedetail/:id', (req, res) => {
         if (results.length === 0) {
             return res.status(404).json({ error: 'Project not found' });
         }
-        res.status(200).json(results[0]); 
+        res.status(200).json(results[0]);
     });
 });
 
@@ -57,10 +57,10 @@ router.post('/donateRequest', upload.single('image'), (req, res) => {
         return res.status(400).json({ error: 'Image is required' });
     }
 
-    const image = req.file.filename; 
+    const image = req.file.filename;
 
-    const query = 
-    `INSERT INTO donationproject 
+    const query =
+        `INSERT INTO donationproject 
     (project_name, description, start_date, end_date, donation_type, image_path, 
     target_amount, current_amount, bank_name, account_number, number_promtpay, role_id) 
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -78,7 +78,7 @@ router.post('/donateRequest', upload.single('image'), (req, res) => {
         bankName,
         accountNumber,
         numberPromtpay,
-        '1'  
+        '1'
     ];
 
     db.query(query, values, (err, result) => {
@@ -116,7 +116,7 @@ router.put('/:id', (req, res) => {
     }
 
     const query = 'UPDATE donationproject SET status = "1" WHERE project_id = ?';
-    
+
     db.query(query, [projectId], (err, result) => {
         if (err) {
             console.error('Error updating project status:', err);
@@ -164,7 +164,7 @@ router.post('/addsouvenir', upload.single('image'), (req, res) => {
             return res.status(500).json({ error: 'Error inserting payment method' });
         }
 
-        const payment_method_id = result.insertId; 
+        const payment_method_id = result.insertId;
 
         const queryProduct = `
         INSERT INTO products 
@@ -179,7 +179,7 @@ router.post('/addsouvenir', upload.single('image'), (req, res) => {
             price,
             stock,
             user_id,
-            "1",  
+            "1",
             payment_method_id,
         ];
 
@@ -196,7 +196,7 @@ router.post('/addsouvenir', upload.single('image'), (req, res) => {
 
 
 router.get('/souvenir', (req, res) => {
-    const query = 
+    const query =
         `SELECT 
         products.*, role.role_id
         FROM products 
@@ -220,7 +220,7 @@ router.put('/updateSouvenir/:id', (req, res) => {
     }
 
     const query = 'UPDATE products SET status = "1" WHERE product_id = ?';
-    
+
     db.query(query, [productId], (err, result) => {
         if (err) {
             console.error('Error updating product status:', err);
@@ -316,12 +316,12 @@ router.put('/editSouvenir/:id', (req, res) => {
         return res.status(400).json({ error: 'Product ID, name, price, and status are required' });
     }
 
-    const query = 
-    `    UPDATE products 
+    const query =
+        `    UPDATE products 
         SET product_name = ?, price = ?, status = ? 
         WHERE product_id = ?
     `;
-    
+
     db.query(query, [product_name, price, status, productId], (err, result) => {
         if (err) {
             console.error('Error updating product:', err);
@@ -340,11 +340,11 @@ router.put('/editSouvenir/:id', (req, res) => {
 router.delete('/deleteSouvenir/:id', (req, res) => {
     const productId = req.params.id;
 
-     // ดึงข้อมูล product_name และ user_id ของสินค้าที่ถูกลบ
-     const getProductQuery = 'SELECT product_name, user_id FROM products WHERE product_id = ?';
-     db.query(getProductQuery, [productId], (err, productResult) => {
+    // ดึงข้อมูล product_name และ user_id ของสินค้าที่ถูกลบ
+    const getProductQuery = 'SELECT product_name, user_id FROM products WHERE product_id = ?';
+    db.query(getProductQuery, [productId], (err, productResult) => {
         if (err || productResult.length === 0) return res.status(500).json({ error: 'Error fetching product information' });
- 
+
         const productName = productResult[0].product_name;
         const userId = productResult[0].user_id;
 
@@ -411,6 +411,7 @@ router.get('/users', (req, res) => {
         FROM users 
         LEFT JOIN profiles ON users.user_id = profiles.user_id
         LEFT JOIN role ON users.role_id = role.role_id
+        WHERE users.deleted_at IS NULL
     `;
     db.query(query, (err, results) => {
         if (err) {
@@ -442,6 +443,7 @@ router.get('/users/:userId', (req, res) => {
             educations.major_id,
             educations.studentId,
             educations.graduation_year,
+            educations.entry_year,
             degree.degree_name,
             major.major_name
         FROM users 
@@ -450,7 +452,7 @@ router.get('/users/:userId', (req, res) => {
         LEFT JOIN educations ON users.user_id = educations.user_id
         LEFT JOIN degree ON educations.degree_id = degree.degree_id
         LEFT JOIN major ON educations.major_id = major.major_id
-        WHERE users.user_id = ? AND users.deleted_at IS NULL
+        WHERE users.user_id = ? 
     `;
 
     const queryactivity = `
@@ -510,33 +512,35 @@ router.get('/users/:userId', (req, res) => {
                 major_name: edu.major_name,
                 studentId: edu.studentId,
                 graduation_year: edu.graduation_year,
+                entry_year: edu.entry_year,
             })),
         };
 
-          // ดึงกิจกรรมและโพสต์พร้อมกัน
+        // ดึงกิจกรรมและโพสต์พร้อมกัน
         db.query(queryactivity, [userId], (errAct, actResults) => {
             if (errAct) {
-            console.error("Error fetching activities:", errAct);
-            return res.status(500).json({ success: false, message: 'Error fetching activities' });
+                console.error("Error fetching activities:", errAct);
+                return res.status(500).json({ success: false, message: 'Error fetching activities' });
             }
-  
-        db.query(queryWebboard, [userId], (errPost, postResults) => {
-          if (errPost) {
-            console.error("Error fetching posts:", errPost);
-            return res.status(500).json({ success: false, message: 'Error fetching posts' });
-          }
-  
-          userInfo.activities = actResults || [];
-          userInfo.posts = postResults || [];
 
-        res.status(200).json({ success: true, data: userInfo });
+            db.query(queryWebboard, [userId], (errPost, postResults) => {
+                if (errPost) {
+                    console.error("Error fetching posts:", errPost);
+                    return res.status(500).json({ success: false, message: 'Error fetching posts' });
+                }
+
+                userInfo.activities = actResults || [];
+                userInfo.posts = postResults || [];
+
+                res.status(200).json({ success: true, data: userInfo });
+            });
         });
-     });
     });
 });
 
 // แก้ไขโปรไฟล์ผู้ใช้
 router.put('/edit-profile-users/:userId', (req, res) => {
+    console.log("Request body:", req.body);
     const userId = req.params.userId;
     const { email, phone, address, educations } = req.body;
 
@@ -564,7 +568,7 @@ router.put('/edit-profile-users/:userId', (req, res) => {
                 }
 
                 const insertEduSql = `
-                    INSERT INTO educations (user_id, degree_id, major_id, studentId, graduation_year)
+                    INSERT INTO educations (user_id, degree_id, major_id, studentId, graduation_year, entry_year)
                     VALUES ?
                 `;
                 const values = filtered.map(e => [
@@ -573,6 +577,7 @@ router.put('/edit-profile-users/:userId', (req, res) => {
                     e.major_id,
                     e.studentId,
                     e.graduation_year,
+                    e.entry_year,
                 ]);
 
                 db.query(insertEduSql, [values], (err, result) => {
@@ -596,51 +601,74 @@ router.put('/edit-profile-users/:userId', (req, res) => {
 // Get all degrees
 router.get("/degrees", (req, res) => {
     db.query("SELECT degree_id, degree_name FROM degree", (err, result) => {
-      if (err) return res.status(500).json([]);
-      res.json(result);
+        if (err) return res.status(500).json([]);
+        res.json(result);
     });
 });
-  
-  // Get all majors
+
+// Get all majors
 router.get("/majors", (req, res) => {
     db.query("SELECT major_id, major_name FROM major", (err, result) => {
-      if (err) return res.status(500).json([]);
-      res.json(result);
+        if (err) return res.status(500).json([]);
+        res.json(result);
     });
 });
-  
- 
+
+
 // เปลี่ยนบทบาทผู้ใช้
 router.put('/:userId/role', (req, res) => {
-  const { userId } = req.params;
-  const { role } = req.body; // ค่าroleใหม่ที่ได้รับจาก frontend
+    const { userId } = req.params;
+    const { role } = req.body; // ค่าroleใหม่ที่ได้รับจาก frontend
 
-  const query = "UPDATE users SET role_id = ? WHERE user_id = ?";
-  db.query(query, [role, userId], (err, results) => {
-    if (err) {
-      console.error("Error updating role:", err);
-      return res.status(500).send("Error updating role");
-    }
-    
-    // console.log("Role updated successfully for user ID:", userId);
-    logManage(userId, 'เปลี่ยนบทบาทผู้ใช้');
+    const query = "UPDATE users SET role_id = ? WHERE user_id = ?";
+    db.query(query, [role, userId], (err, results) => {
+        if (err) {
+            console.error("Error updating role:", err);
+            return res.status(500).send("Error updating role");
+        }
 
-    res.send("เปลี่ยนบทบาทผู้ใช้สำเร็จ");
-  });
+        // console.log("Role updated successfully for user ID:", userId);
+        logManage(userId, 'เปลี่ยนบทบาทผู้ใช้');
+
+        res.send("เปลี่ยนบทบาทผู้ใช้สำเร็จ");
+    });
 });
 
 // ลบผู้ใช้
+// router.delete("/delete-user/:userId", (req, res) => {
+//     const { userId } = req.params;
+
+//     const query = "DELETE FROM users WHERE user_id = ?";
+//     db.query(query, [userId], (err, results) => {
+//         if (err) {
+//             console.error("Error deleting user:", err);
+//             return res.status(500).send("Error deleting user");
+//         }
+
+//         logManage(userId, 'ลบผู้ใช้');
+//         res.send("ลบผู้ใช้สำเร็จ");
+//     });
+// });
+
+// ลบผู้ใช้ (Soft Delete)
 router.delete("/delete-user/:userId", (req, res) => {
     const { userId } = req.params;
 
-    const query = "DELETE FROM users WHERE user_id = ?";
+    const query = "UPDATE users SET deleted_at = NOW() WHERE user_id = ?";
     db.query(query, [userId], (err, results) => {
         if (err) {
-            console.error("Error deleting user:", err);
-            return res.status(500).send("Error deleting user");
+            console.error("Error soft-deleting user:", err);
+            return res.status(500).send("เกิดข้อผิดพลาดในการลบผู้ใช้");
         }
 
+        // ตรวจสอบว่ามีการอัปเดตแถวจริงหรือไม่
+        if (results.affectedRows === 0) {
+            return res.status(404).send("ไม่พบผู้ใช้ที่ต้องการลบ");
+        }
+
+        //บันทึก log
         logManage(userId, 'ลบผู้ใช้');
+
         res.send("ลบผู้ใช้สำเร็จ");
     });
 });
@@ -650,23 +678,23 @@ router.delete("/delete-user/:userId", (req, res) => {
 router.put("/:userId/status", (req, res) => {
     const { userId } = req.params;
     const { is_active } = req.body; // ค่าสถานะที่ได้รับจาก frontend
-  
+
     const query = "UPDATE users SET is_active = ? WHERE user_id = ?";
     db.query(query, [is_active, userId], (err, results) => {
-      if (err) {
-        console.error("Error updating status:", err);
-        return res.status(500).send("Error updating status");
-      }
-   
-      logManage(userId,'เปลี่ยนสถานะผู้ใช้');
-      res.send("User status updated successfully");
+        if (err) {
+            console.error("Error updating status:", err);
+            return res.status(500).send("Error updating status");
+        }
+
+        logManage(userId, 'เปลี่ยนสถานะผู้ใช้');
+        res.send("User status updated successfully");
     });
 });
 
 // ส่วน dashboard
-// จำนวนศิษย์เก่าทั้งหมด
+// จำนวนศิษย์เก่าทั้งหมด 
 router.get('/total-alumni', (req, res) => {
-    const query = 'SELECT COUNT(*) AS totalAlumni FROM users WHERE role_id = 3 AND deleted_at IS NULL';
+    const query = 'SELECT COUNT(*) AS totalAlumni FROM users WHERE role_id = 3';
     db.query(query, (err, results) => {
         if (err) {
             console.error('Database query failed:', err);
@@ -718,45 +746,45 @@ router.get('/activity-per-year', (req, res) => {
 // GET /admin/dashboard-stats
 router.get('/dashboard-stats', (req, res) => {
     let result = {
-      totalParticipants: 0,
-      ongoingActivity: 0,
-      ongoingProject: 0,
-      totalDonations: 0,
+        totalParticipants: 0,
+        ongoingActivity: 0,
+        ongoingProject: 0,
+        totalDonations: 0,
     };
-  
+
     db.query('SELECT COUNT(*) AS total FROM participants', (err, participants) => {
-      if (err) {
-        console.error('Error fetching participants:', err);
-        return res.status(500).json({ message: 'Internal server error' });
-      }
-      result.totalParticipants = participants[0].total;
-  
-      db.query("SELECT COUNT(*) AS total FROM activity WHERE status = 2", (err, activities) => {
         if (err) {
-          console.error('Error fetching activities:', err);
-          return res.status(500).json({ message: 'Internal server error' });
-        }
-        result.ongoingActivity = activities[0].total;
-  
-        db.query("SELECT COUNT(*) AS total FROM donationproject WHERE status = 1", (err, projects) => {
-          if (err) {
-            console.error('Error fetching donation projects:', err);
+            console.error('Error fetching participants:', err);
             return res.status(500).json({ message: 'Internal server error' });
-          }
-          result.ongoingProject = projects[0].total;
-  
-          db.query('SELECT SUM(amount) AS total FROM donations', (err, donations) => {
+        }
+        result.totalParticipants = participants[0].total;
+
+        db.query("SELECT COUNT(*) AS total FROM activity WHERE status = 2", (err, activities) => {
             if (err) {
-              console.error('Error fetching donations:', err);
-              return res.status(500).json({ message: 'Internal server error' });
+                console.error('Error fetching activities:', err);
+                return res.status(500).json({ message: 'Internal server error' });
             }
-            result.totalDonations = donations[0].total || 0;
-  
-            // ส่งผลลัพธ์สุดท้าย
-            res.json(result);
-          });
+            result.ongoingActivity = activities[0].total;
+
+            db.query("SELECT COUNT(*) AS total FROM donationproject WHERE status = 1", (err, projects) => {
+                if (err) {
+                    console.error('Error fetching donation projects:', err);
+                    return res.status(500).json({ message: 'Internal server error' });
+                }
+                result.ongoingProject = projects[0].total;
+
+                db.query('SELECT SUM(amount) AS total FROM donations', (err, donations) => {
+                    if (err) {
+                        console.error('Error fetching donations:', err);
+                        return res.status(500).json({ message: 'Internal server error' });
+                    }
+                    result.totalDonations = donations[0].total || 0;
+
+                    // ส่งผลลัพธ์สุดท้าย
+                    res.json(result);
+                });
+            });
         });
-      });
     });
 });
 

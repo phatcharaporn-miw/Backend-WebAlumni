@@ -3,7 +3,7 @@ var router = express.Router();
 var db = require('../db');
 const bcrypt = require('bcrypt');
 const nodemailer = require('nodemailer');
-const { logUserAction }= require('../logUserAction'); 
+const { logUserAction } = require('../logUserAction');
 
 router.post('/login', (req, res) => {
   const { username, password } = req.body;
@@ -25,7 +25,7 @@ router.post('/login', (req, res) => {
 
     if (results.length === 0) {
       return res.status(401).json({ success: false, message: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" });
-  }
+    }
 
     const user = results[0];
 
@@ -43,17 +43,17 @@ router.post('/login', (req, res) => {
       if (!match) {
         return res.status(401).json({ success: false, message: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" });
       }
-     // บันทึก session
+      // บันทึก session
       req.session.user = {
         id: user.user_id,
         username: user.username,
-        role: user.role_id,    
-      };   
+        role: user.role_id,
+      };
 
-       // บันทึก log login
-       const ip = req.ip;
-       logUserAction(user.user_id, 'login', ip);
-     
+      // บันทึก log login
+      const ip = req.ip;
+      logUserAction(user.user_id, 'login', ip);
+
       req.session.save(err => {
         if (err) {
           console.error('Session save error:', err);
@@ -61,15 +61,16 @@ router.post('/login', (req, res) => {
         }
 
         // ส่ง response กลับ
-        res.json({ 
-          success: true, 
-          message: 'เข้าสู่ระบบสำเร็จ!', 
-          userId: user.user_id, 
+        res.json({
+          success: true,
+          message: 'เข้าสู่ระบบสำเร็จ!',
+          userId: user.user_id,
           role: user.role_id,
-          username: user.username,   
-          image_path: user.image_path, 
+          username: user.username,
+          image_path: user.image_path,
+          firstLogin: user.is_first_login === 1 
         });
-      });     
+      });
     });
   });
 });
@@ -100,17 +101,41 @@ var transport = nodemailer.createTransport({
 
 
 //เอาไว้เช็คการ hash password
-// const password = "Admin1234";
+// const password = "Admin12345678";
 // bcrypt.hash(password, 10, (err, hash) => {
 //   if (err) throw err;
 //   console.log("Hashed password:", hash);
 
 //   const query = 'UPDATE login SET password = ? WHERE username = ?';
-//   db.query(query, [hash, 'admin'], (err, result) => {
+//   db.query(query, [hash, 'ad_min'], (err, result) => {
 //     if (err) throw err;
 //     console.log('Password updated!');
 //   });
 // }); 
+
+
+// เปลี่ยนรหัสผ่านเมื่อเข้าระบบครั้งแรก
+router.post('/change-password', (req, res) => {
+  const { userId, newPassword } = req.body;
+
+  // ตรวจสอบข้อมูลที่รับมา
+    if (!userId || !newPassword) {
+        return res.status(400).send("Missing required fields");
+    }
+
+  bcrypt.hash(newPassword, 10, (err, hashedPassword) => {
+    if (err) return res.status(500).send('Error hashing password');
+
+    db.query(
+      'UPDATE login SET password = ?, is_first_login = FALSE WHERE user_id = ?',
+      [hashedPassword, userId],
+      (err, results) => {
+        if (err) return res.status(500).send('Database error');
+        return res.status(200).send('เปลี่ยนรหัสผ่านสำเร็จ');
+      }
+    );
+  });
+});
 
 // ลืมรหัสผ่าน
 const dayjs = require("dayjs");
@@ -124,8 +149,8 @@ router.post("/forgot-password", (req, res) => {
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
   const otpExpiry = dayjs().tz("Asia/Bangkok").add(10, "minute").format("YYYY-MM-DD HH:mm:ss");
 
-  console.log("📨 Email ที่รับมา:", email);
-  console.log("🔧 OTP:", otp, "| หมดอายุ:", otpExpiry);
+  // console.log("📨 Email ที่รับมา:", email);
+  // console.log("🔧 OTP:", otp, "| หมดอายุ:", otpExpiry);
 
   const sql = `
     SELECT u.user_id FROM users u
@@ -141,16 +166,16 @@ router.post("/forgot-password", (req, res) => {
 
     console.log("📦 จะอัปเดต OTP:", { otp, otpExpiry, userId });
 
-db.query(
-  `UPDATE users SET otp = ?, otp_expiry = ? WHERE user_id = ?`,
-  [otp, otpExpiry, userId],
-  (err, updateResult) => {
-    if (err) {
-      console.error("❌ อัปเดต OTP ล้มเหลว:", err);
-      return res.status(500).json({ success: false, message: "อัปเดต OTP ไม่สำเร็จ" });
-    }
+    db.query(
+      `UPDATE users SET otp = ?, otp_expiry = ? WHERE user_id = ?`,
+      [otp, otpExpiry, userId],
+      (err, updateResult) => {
+        if (err) {
+          console.error("อัปเดต OTP ล้มเหลว:", err);
+          return res.status(500).json({ success: false, message: "อัปเดต OTP ไม่สำเร็จ" });
+        }
 
-    console.log("✅ OTP ถูกอัปเดตแล้ว:", updateResult);
+        console.log("✅ OTP ถูกอัปเดตแล้ว:", updateResult);
         transport.sendMail({
           from: '"Alumni System" <no-reply@alumni.com>',
           to: email,
@@ -186,12 +211,12 @@ router.post("/reset-password", (req, res) => {
     const otpExpiry = dayjs(user.otp_expiry).tz("Asia/Bangkok");
     const now = dayjs().tz("Asia/Bangkok");
 
-    console.log("🔐 ตรวจ OTP:", {
-      storedOtp,
-      clientOtp: otp,
-      otpExpiry: otpExpiry.format(),
-      now: now.format()
-    });
+    // console.log("🔐 ตรวจ OTP:", {
+    //   storedOtp,
+    //   clientOtp: otp,
+    //   otpExpiry: otpExpiry.format(),
+    //   now: now.format()
+    // });
 
     if (String(storedOtp) !== String(otp).trim() || now.isAfter(otpExpiry)) {
       return res.status(400).json({ success: false, message: "OTP ไม่ถูกต้องหรือหมดอายุ" });
@@ -204,6 +229,7 @@ router.post("/reset-password", (req, res) => {
       db.query("UPDATE login SET password = ? WHERE user_id = ?", [hashedPassword, user.user_id], (err) => {
         if (err) return res.status(500).json({ success: false, message: "ไม่สามารถรีเซ็ตรหัสผ่านได้" });
 
+        // ค่าใน DB เป็น NULL หลังรีเซ็ต
         db.query("UPDATE users SET otp = NULL, otp_expiry = NULL WHERE user_id = ?", [user.user_id], (err) => {
           if (err) return res.status(500).json({ success: false, message: "ไม่สามารถล้าง OTP ได้" });
 
@@ -213,5 +239,58 @@ router.post("/reset-password", (req, res) => {
     });
   });
 });
+
+
+// ตรวจสอบรหัสนักศึกษา
+router.post('/check-studentId', (req, res) => {
+  const { studentId } = req.body;
+  if (!studentId) return res.status(400).json({ message: 'กรุณาระบุรหัสนักศึกษา' });
+  // console.log('Received studentId:', studentId);
+
+  let query = '';
+  let param = '';
+
+  if (/^\d{9}-\d$/.test(studentId)) {
+    // กรณีใส่รหัสเต็ม เช่น 653380253-3
+    query = `
+      SELECT e.studentId, e.graduation_year, 
+             p.full_name, d.degree_name, m.major_name
+      FROM educations e
+      JOIN profiles p ON e.user_id = p.user_id
+      JOIN degree d ON e.degree_id = d.degree_id
+      JOIN major m ON e.major_id = m.major_id
+      WHERE e.studentId = ?
+    `;
+    param = studentId;
+  } else if (/^\d{3}-\d$/.test(studentId)) {
+    // กรณีใส่ 4 ตัวท้าย เช่น 253-3
+    query = `
+      SELECT e.studentId, e.graduation_year, 
+             p.full_name, d.degree_name, m.major_name
+      FROM educations e
+      JOIN profiles p ON e.user_id = p.user_id
+      JOIN degree d ON e.degree_id = d.degree_id
+      JOIN major m ON e.major_id = m.major_id
+      WHERE e.studentId LIKE ?
+    `;
+    param = `%${studentId}`;
+  } else {
+    return res.status(400).json({ message: 'รูปแบบรหัสไม่ถูกต้อง' });
+  }
+
+  db.query(query, [param], (err, results) => {
+    if (err) {
+      console.error('เกิดข้อผิดพลาดในการตรวจสอบรหัสนักศึกษา:', err);
+      return res.status(500).json({ success: false, message: 'Database error' });
+    }
+
+    if (results.length > 0) {
+      return res.status(200).json({ success: true, message: 'พบรหัสนักศึกษาในระบบ', data: results[0] });
+    } else {
+      return res.status(404).json({ success: false, message: 'ไม่พบรหัสนักศึกษาในระบบ' });
+    }
+  });
+});
+
 
 module.exports = router;

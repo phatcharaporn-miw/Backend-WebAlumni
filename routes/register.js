@@ -52,7 +52,7 @@ router.post('/register', upload.single('image_path'), async (req, res) => {
         line
     } = req.body;
         
-    const image_path = `/img/${req.file.filename}`;        
+    const image_path = `img/${req.file.filename}`;        
     // console.log('Image Path:', image_path);
 
      // ตรวจสอบรูปแบบรหัสผ่าน

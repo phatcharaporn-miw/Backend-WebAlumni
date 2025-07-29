@@ -5,32 +5,33 @@ var db = require('../db');
 
 // ดึงแจ้งเตือนของผู้ใช้
 router.get('/notification/:userId', (req, res) => {
-    const {userId} = req.params;
+    const { userId } = req.params;
 
-    // console.log("🔍 ดึงแจ้งเตือนสำหรับ userId:", userId);
-
-    const queryUser = `
-        SELECT * FROM notifications 
+    const query = `
+        SELECT 
+            notification_id,
+            user_id,
+            type,
+            related_id,
+            message,
+            send_date,
+            status,
+            deleted_at
+        FROM notifications 
         WHERE user_id = ? AND deleted_at IS NULL
         ORDER BY send_date DESC
     `;
 
-    db.query(queryUser, [userId], (err, results) => {
+    db.query(query, [userId], (err, results) => {
         if (err) {
-          console.error('เกิดข้อผิดพลาดในการดึงการแจ้งเตือน:', err);
-          return res.status(500).json({ success: false, message: 'Database error' });
+            console.error('❌ ดึงการแจ้งเตือนล้มเหลว:', err);
+            return res.status(500).json({ success: false, message: 'Database error' });
         }
 
-        if (results.length === 0) {
-            return res.json({ success: true, message: 'ไม่มีการแจ้งเตือน' });
-        }
-
-         // ใช้ results แทน notifications
-        //  console.log("🔍 พบแจ้งเตือน:", results);
-         
-        res.json({ success: true, data: results});
+        res.json({ success: true, data: results });
     });
-})
+});
+
 
 // อัปเดตสถานะแจ้งเตือนเป็น "อ่านแล้ว"
 router.put('/read/:notificationId', (req, res) => {

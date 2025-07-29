@@ -5,14 +5,14 @@ const multer = require('multer');
 const path = require('path');
 const db = require('../db');
 
-// const QRCode = require('qrcode');
-// const { generatePayload } = require('promptpay');
+const generatePayload = require('promptpay-qr');
+const QRCode = require('qrcode');
 
 
 // ตั้งค่าการจัดเก็บไฟล์
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        cb(null, path.join(__dirname, '../uploads/')); 
+        cb(null, path.join(__dirname, '../uploads/'));
     },
     filename: (req, file, cb) => {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -48,10 +48,16 @@ route.get('/', (req, res) => {
 route.get('/souvenirDetail/:id', (req, res) => {
     const productId = req.params.id;
 
-    const query = 'SELECT * FROM products WHERE product_id = ?';
+    const query = `
+        SELECT p.*, pm.promptpay_number
+        FROM products p
+        JOIN payment_methods pm ON p.payment_method_id = pm.payment_method_id
+        WHERE p.product_id = ?
+    `;
+
     db.query(query, [productId], (err, results) => {
         if (err) {
-            console.error('Error fetching project details:', err);
+            console.error('Error fetching product details:', err);
             return res.status(500).json({ error: 'Error fetching product details' });
         }
 
@@ -59,9 +65,43 @@ route.get('/souvenirDetail/:id', (req, res) => {
             return res.status(404).json({ error: 'Product not found' });
         }
 
-        res.status(200).json(results[0]);
+        res.status(200).json({
+            ...results[0],
+            out_of_stock: results[0].stock <= 0
+        });
+
     });
 });
+
+// รอการอนุมัติคำขอ
+route.get('/pending-requests', (req, res) => {
+    const userId = req.session.user?.id;
+
+    if (!userId) {
+        return res.status(401).json({ error: "ไม่ได้เข้าสู่ระบบ" });
+    }
+
+    // ตอนนี้มีแค่สินค้า
+    const query = `
+    SELECT 
+    products.*, role.role_id
+    FROM products 
+    JOIN users ON products.user_id = users.user_id
+    JOIN role ON users.role_id = role.role_id
+    WHERE status = "0"
+    `;
+
+    db.query(query, [userId, userId], (err, results) => {
+        if (err) {
+            console.error("Error fetching pending requests:", err);
+            return res.status(500).json({ error: "ดึงข้อมูลไม่สำเร็จ" });
+        }
+
+        res.json(results);
+    });
+});
+
+
 
 // เพิ่มสินค้า
 route.post('/addsouvenir', upload.single('image'), (req, res) => {
@@ -189,7 +229,6 @@ route.post('/addsouvenir', upload.single('image'), (req, res) => {
 });
 
 
-
 // ดึงตะกร้ามาจ้า
 route.get('/cart', (req, res) => {
     const user_id = req.query.user_id;
@@ -199,17 +238,23 @@ route.get('/cart', (req, res) => {
     }
 
     const query = `
-        SELECT cart.*, products.product_id, products.product_name, users.user_id, 
-        products.price,products.image
+        SELECT 
+            cart.*, 
+            products.product_id, 
+            products.product_name, 
+            products.price, 
+            products.image,
+            products.payment_method_id,
+            pm.promptpay_number
         FROM cart
-        JOIN users ON cart.user_id = users.user_id
         JOIN products ON cart.product_id = products.product_id
+        LEFT JOIN payment_methods pm ON products.payment_method_id = pm.payment_method_id
         WHERE cart.user_id = ?
     `;
 
     db.query(query, [user_id], (err, results) => {
         if (err) {
-            console.error('Error executing query:', err); 
+            console.error('Error executing query:', err);
             return res.status(500).json({ error: 'Error fetching cart details', details: err });
         }
 
@@ -288,7 +333,6 @@ route.put('/cart/update', (req, res) => {
         });
     });
 });
-
 
 // เพิ่มจำนวนสินค้า
 route.post('/cart/add', (req, res) => {
@@ -403,70 +447,178 @@ route.delete('/cart/:productId', (req, res) => {
     });
 });
 
+// ฟังก์ชันแจ้งเตือนแอดมินเมื่อมีการสั่งซื้อใหม่
+async function notifyAdminNewOrder(orderId, buyerId) {
+    try {
+        const [admins] = await db.promise().query(
+            `SELECT user_id FROM users WHERE role_id = 1 AND is_active = 1`
+        );
+        if (!admins || admins.length === 0) return;
 
+        const message = `มีคำสั่งซื้อใหม่ Order ID: ${orderId} จากผู้ใช้ ${buyerId}`;
+        const insertNoti = `
+            INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
+            VALUES (?, 'order', ?, ?, NOW(), 'ยังไม่อ่าน')
+        `;
+        for (const admin of admins) {
+            await db.promise().query(insertNoti, [admin.user_id, message, orderId]);
+        }
+
+    } catch (err) {
+        console.error("Error notifying admin:", err);
+    }
+
+    // ดึง seller_id ของสินค้าที่อยู่ใน order นี้
+    const [sellers] = await db.promise().query(
+        `SELECT DISTINCT p.seller_id 
+     FROM order_detail oi 
+     JOIN products p ON oi.product_id = p.product_id 
+     WHERE oi.order_id = ?`,
+        [orderId]
+    );
+
+    const sellerMessage = `คุณมีคำสั่งซื้อสินค้าใหม่ใน Order ID: ${orderId} จากผู้ใช้ ${buyerId}`;
+    for (const seller of sellers) {
+        await db.promise().query(insertNoti, [seller.seller_id, sellerMessage, orderId]);
+    }
+
+}
 
 // จ่ายเงิน
-route.post('/checkout', async (req, res) => {
+route.post('/checkout', upload.single('paymentSlip'), async (req, res) => {
     const { user_id, products, shippingAddress } = req.body;
 
-    if (!user_id || !products || products.length === 0) {
+    if (!user_id || !products || !shippingAddress) {
         return res.status(400).json({ error: "ข้อมูลไม่ครบถ้วน" });
     }
 
-    const total_amount = products.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-    const total_quantity = products.reduce((sum, item) => sum + item.quantity, 0);
+    let parsedProducts;
+    try {
+        parsedProducts = JSON.parse(products);
+    } catch (err) {
+        return res.status(400).json({ error: "รูปแบบสินค้าไม่ถูกต้อง" });
+    }
+
+    if (!Array.isArray(parsedProducts) || parsedProducts.length === 0) {
+        return res.status(400).json({ error: "ไม่มีรายการสินค้า" });
+    }
+
+    // ตรวจสอบว่าทุก product มี user_id (seller_id) หรือไม่
+    let sellerId;
+    let sellerProducts = parsedProducts;
+    if (parsedProducts.length > 0 && parsedProducts[0].user_id) {
+        const sellerIds = [...new Set(parsedProducts.map(p => p.user_id))];
+        if (sellerIds.length !== 1) {
+            return res.status(400).json({ error: "กรุณาเลือกชำระสินค้าเฉพาะของผู้ขายเดียวกันเท่านั้น" });
+        }
+        sellerId = sellerIds[0];
+    } else {
+        const [sellerRows] = await db.promise().query(
+            `SELECT user_id FROM products WHERE product_id = ? LIMIT 1`,
+            [parsedProducts[0].product_id]
+        );
+        if (!sellerRows || sellerRows.length === 0) {
+            return res.status(400).json({ error: "ไม่พบข้อมูลผู้ขายของสินค้า" });
+        }
+        sellerId = sellerRows[0].user_id;
+    }
+
+    // ตรวจสอบ promptpay_number ของสินค้าทุกชิ้น
+    const promptpays = [...new Set(parsedProducts.map(p => p.promptpay_number))];
+    if (promptpays.length !== 1 || !promptpays[0]) {
+        return res.status(400).json({ error: "กรุณาเลือกชำระสินค้าเฉพาะที่มี PromptPay เดียวกันเท่านั้น" });
+    }
+    const promptpayNumber = promptpays[0];
 
     try {
-        //method_id จากสินค้าเป็นค่าเดียวกันหรือไม่
-        const paymentMethodIds = products.map((product) => product.payment_method_id);
-
-        //payment_method_id ของสินค้าทั้งหมดเหมือนกันหรือไม่
-        const uniquePaymentMethodIds = new Set(paymentMethodIds);
-        if (uniquePaymentMethodIds.size > 1) {
-            return res.status(400).json({ error: "สินค้าภายในคำสั่งซื้อมีวิธีการชำระเงินที่แตกต่างกัน" });
+        // ดึง payment_method_id จากสินค้าชิ้นแรก
+        let paymentMethodId;
+        if (sellerProducts.length > 0) {
+            const [pmRows] = await db.promise().query(
+                `SELECT payment_method_id FROM products WHERE product_id = ? LIMIT 1`,
+                [sellerProducts[0].product_id]
+            );
+            if (!pmRows || pmRows.length === 0) {
+                return res.status(400).json({ error: "ไม่พบ payment method ของสินค้า" });
+            }
+            paymentMethodId = pmRows[0].payment_method_id;
+        } else {
+            return res.status(400).json({ error: "ไม่มีสินค้า" });
         }
 
-        const paymentMethodId = [...uniquePaymentMethodIds][0];
+        const slipPath = req.file ? req.file.filename : null;
 
-        //สร้างคำสั่งซื้อใหม่
+        const total_amount = sellerProducts.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+        const total_quantity = sellerProducts.reduce((sum, item) => sum + item.quantity, 0);
+
+        // ตรวจสอบ stock และอัปเดต stock
+        // ลดจำนวนสินค้า
+        for (const item of parsedProducts) {
+            const [product] = await db.promise().query(
+                'SELECT stock FROM products WHERE product_id = ?',
+                [item.product_id]
+            );
+
+            if (!product.length || product[0].stock < item.quantity) {
+                return res.status(400).json({ error: `สินค้ามีจำนวนไม่เพียงพอสำหรับ ${item.product_name}` });
+            }
+
+            await db.promise().query(
+                'UPDATE products SET stock = stock - ? WHERE product_id = ?',
+                [item.quantity, item.product_id]
+            );
+        }
+
+
+        // สร้างคำสั่งซื้อ (order_status = 'processing')
         const [orderResult] = await db.promise().query(
-            "INSERT INTO orders (user_id, payment_status, quantity ,order_status, total_amount, shippingAddress, order_date, payment_id) VALUES (?, 'pending', ?, 'processing', ?, ?, NOW(), NULL)",
-            [user_id, total_quantity, total_amount, shippingAddress]
+            `INSERT INTO orders (user_id, seller_id, payment_status, quantity, order_status, total_amount, shippingAddress, order_date)
+             VALUES (?, ?, 'pending', ?, 'processing', ?, ?, NOW())`,
+            [user_id, sellerId, total_quantity, total_amount, shippingAddress]
         );
 
         const orderId = orderResult.insertId;
 
-        //สร้างการชำระเงิน
+        // เพิ่มข้อมูลการชำระเงิน (payment_status = 'paid')
         const [paymentResult] = await db.promise().query(
-            "INSERT INTO payment (order_id, amount, payment_status, payment_date, created_at) VALUES (?, ?, 'pending', NOW(), NOW())",
-            [orderId, total_amount, paymentMethodId]
+            `INSERT INTO payment (order_id, amount, payment_status, payment_date, created_at, payment_method_id, slip_path)
+             VALUES (?, ?, 'pending', NOW(), NOW(), ?, ?)`,
+            [orderId, total_amount, paymentMethodId, slipPath]
         );
 
         const paymentId = paymentResult.insertId;
 
-        //อัปเดตคำสั่งซื้อให้มี payment_id
+        // อัปเดต payment_id ในตาราง orders
         await db.promise().query(
-            "UPDATE orders SET payment_id = ? WHERE order_id = ?",
+            `UPDATE orders SET payment_id = ? WHERE order_id = ?`,
             [paymentId, orderId]
         );
 
-        //เพิ่มสินค้าในorder_detail
-        const insertItems = products.map(product =>
+        // เพิ่มรายละเอียดสินค้า
+        const insertItems = sellerProducts.map(product =>
             db.promise().query(
-                "INSERT INTO order_detail (order_id, product_id, quantity, total) VALUES (?, ?, ?, ?)",
-                [orderId, product.product_id, product.quantity, product.total]
+                `INSERT INTO order_detail (order_id, product_id, quantity, total)
+                VALUES (?, ?, ?, ?)`,
+                [orderId, product.product_id, product.quantity, product.price * product.quantity]
             )
         );
 
         await Promise.all(insertItems);
 
-        //เคลียสินค้าจากตะกร้า
-        await db.promise().query("DELETE FROM cart WHERE user_id = ?", [user_id]);
+        // ลบสินค้าจากตะกร้า (เฉพาะของ seller นี้)
+        const productIds = sellerProducts.map(p => p.product_id);
+        await db.promise().query(
+            `DELETE FROM cart WHERE user_id = ? AND product_id IN (${productIds.map(() => '?').join(',')})`,
+            [user_id, ...productIds]
+        );
 
-        res.json({ message: "สั่งซื้อสำเร็จ!", orderId });
+        // แจ้งเตือนแอดมิน
+        await notifyAdminNewOrder(orderId, user_id);
+
+        res.status(200).json({ message: "สั่งซื้อสำเร็จ", orderId });
 
     } catch (error) {
-        console.error("Error processing checkout:", error);
+        console.error("Checkout error:", error);
         res.status(500).json({ error: "เกิดข้อผิดพลาดในการสั่งซื้อ" });
     }
 });
@@ -487,7 +639,7 @@ route.get('/order_history', async (req, res) => {
              WHERE o.user_id = ?
              ORDER BY o.order_date DESC`, [userId]
         );
-        
+
         if (orders.length === 0) {
             return res.status(404).json({ message: 'ไม่พบประวัติการสั่งซื้อ' });
         }
@@ -495,9 +647,9 @@ route.get('/order_history', async (req, res) => {
         const orderDetailsPromises = orders.map(async (order) => {
             const [orderDetails] = await db.promise().query(
                 `SELECT od.product_id, od.quantity, od.total, p.product_name
-                 FROM order_detail od
-                 LEFT JOIN products p ON od.product_id = p.product_id
-                 WHERE od.order_id = ?`, [order.order_id]
+                FROM order_detail od
+                LEFT JOIN products p ON od.product_id = p.product_id
+                WHERE od.order_id = ?`, [order.order_id]
             );
 
             order.details = orderDetails;
@@ -514,5 +666,34 @@ route.get('/order_history', async (req, res) => {
     }
 });
 
+// สร้าคิวอาร์โค้ดสำหรับ PromptPay
+route.post('/generateQR', async (req, res) => {
+    const { amount, numberPromtpay } = req.body;
+
+    console.log("REQ BODY:", req.body); // ตรวจสอบข้อมูลที่ส่งมา
+
+    if (!numberPromtpay || isNaN(amount)) {
+        return res.status(400).json({ RespCode: 400, RespMessage: 'ข้อมูลไม่ครบถ้วน' });
+    }
+
+    try {
+        const payload = generatePayload(numberPromtpay, { amount: parseFloat(amount) });
+
+        const qrUrl = await QRCode.toDataURL(payload);
+
+        return res.status(200).json({
+            RespCode: 200,
+            RespMessage: 'QR Code generated successfully',
+            Result: qrUrl
+        });
+    } catch (err) {
+        console.error('Error generating QR code:', err);
+        return res.status(500).json({
+            RespCode: 500,
+            RespMessage: 'Internal Server Error',
+            error: err.toString()
+        });
+    }
+});
 
 module.exports = route;
