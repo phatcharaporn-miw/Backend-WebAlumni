@@ -236,7 +236,7 @@ router.get('/orders-user/:userId', async (req, res) => {
     const ordersWithProducts = orders.map(order => {
       return {
         ...order,
-        tracking_number: order.tracking_number, // เพิ่ม tracking_number ให้ชัดเจน
+        tracking_number: order.tracking_number, // เพิ่ม tracking_number 
         products: orderItems.filter(item => item.order_id === order.order_id)
       };
     });
