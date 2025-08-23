@@ -5,50 +5,50 @@ const bcrypt = require('bcrypt');
 const passport = require('passport');
 
 
-router.post('/login', (req, res) => {
-    const { username, password } = req.body;
+// router.post('/login', (req, res) => {
+//     const { username, password } = req.body;
 
-    const query = `
-      SELECT login.*, role.role_id, profiles.image_path
-FROM login
-JOIN users ON login.user_id = users.user_id
-JOIN role ON users.role_id = role.role_id
-JOIN profiles ON users.user_id = profiles.user_id
-WHERE login.username = ?
-    `;
+//     const query = `
+//       SELECT login.*, role.role_id, profiles.image_path
+// FROM login
+// JOIN users ON login.user_id = users.user_id
+// JOIN role ON users.role_id = role.role_id
+// JOIN profiles ON users.user_id = profiles.user_id
+// WHERE login.username = ?
+//     `;
 
-    db.query(query, [username], (err, results) => {
-        if (err) {
-            console.error('Database error:', err);
-            return res.status(500).json({ success: false, message: 'Database error' });
-        }
+//     db.query(query, [username], (err, results) => {
+//         if (err) {
+//             console.error('Database error:', err);
+//             return res.status(500).json({ success: false, message: 'Database error' });
+//         }
 
-        if (results.length === 0) {
-            return res.status(401).json({ success: false, message: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" });
-        }
+//         if (results.length === 0) {
+//             return res.status(401).json({ success: false, message: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" });
+//         }
 
-        const user = results[0];
+//         const user = results[0];
 
-        // ตั้งค่า session ให้กับ user
-        req.session.user = {
-            id: user.user_id,
-            username: user.username,
-            role: user.role_id,
-        };
+//         // ตั้งค่า session ให้กับ user
+//         req.session.user = {
+//             id: user.user_id,
+//             username: user.username,
+//             role: user.role_id,
+//         };
 
-        console.log('Session after login:', req.session);  // ตรวจสอบ session ที่บันทึกแล้ว
+//         console.log('Session after login:', req.session);  // ตรวจสอบ session ที่บันทึกแล้ว
 
-        res.json({
-            success: true,
-            message: 'เข้าสู่ระบบสำเร็จ!',
-            userId: user.user_id,
-            role: user.role_id,
-            username: user.username,
-            image_path: user.image_path  // ตรวจสอบว่า image_path ถูกส่งไป
-        });
+//         res.json({
+//             success: true,
+//             message: 'เข้าสู่ระบบสำเร็จ!',
+//             userId: user.user_id,
+//             role: user.role_id,
+//             username: user.username,
+//             image_path: user.image_path  // ตรวจสอบว่า image_path ถูกส่งไป
+//         });
 
-    });
-});
+//     });
+// });
 
 
 //เอาไว้เช็คการ hash password

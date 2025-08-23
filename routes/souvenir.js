@@ -4,6 +4,7 @@ const route = express.Router();
 const multer = require('multer');
 const path = require('path');
 const db = require('../db');
+const { logPayment, logOrder } = require('../logUserAction');
 
 const generatePayload = require('promptpay-qr');
 const QRCode = require('qrcode');
@@ -88,7 +89,7 @@ route.get('/pending-requests', (req, res) => {
     FROM products 
     JOIN users ON products.user_id = users.user_id
     JOIN role ON users.role_id = role.role_id
-    WHERE status = "0"
+    WHERE status = "0" AND products.user_id = ?
     `;
 
     db.query(query, [userId, userId], (err, results) => {
@@ -100,7 +101,6 @@ route.get('/pending-requests', (req, res) => {
         res.json(results);
     });
 });
-
 
 
 // เพิ่มสินค้า
@@ -447,42 +447,49 @@ route.delete('/cart/:productId', (req, res) => {
     });
 });
 
-// ฟังก์ชันแจ้งเตือนแอดมินเมื่อมีการสั่งซื้อใหม่
+// ฟังก์ชันแจ้งเตือนแอดมินและผู้ขายเมื่อมีการสั่งซื้อใหม่
 async function notifyAdminNewOrder(orderId, buyerId) {
+    const insertNoti = `
+        INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
+        VALUES (?, 'order', ?, ?, NOW(), 'ยังไม่อ่าน')
+    `;
+
     try {
+        // แจ้งเตือนแอดมิน
         const [admins] = await db.promise().query(
             `SELECT user_id FROM users WHERE role_id = 1 AND is_active = 1`
         );
-        if (!admins || admins.length === 0) return;
-
-        const message = `มีคำสั่งซื้อใหม่ Order ID: ${orderId} จากผู้ใช้ ${buyerId}`;
-        const insertNoti = `
-            INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
-            VALUES (?, 'order', ?, ?, NOW(), 'ยังไม่อ่าน')
-        `;
-        for (const admin of admins) {
-            await db.promise().query(insertNoti, [admin.user_id, message, orderId]);
+        if (admins && admins.length > 0) {
+            const message = `มีคำสั่งซื้อใหม่ Order ID: ${orderId}`;
+            for (const admin of admins) {
+                await db.promise().query(insertNoti, [admin.user_id, message, orderId]);
+            }
         }
-
     } catch (err) {
         console.error("Error notifying admin:", err);
     }
 
-    // ดึง seller_id ของสินค้าที่อยู่ใน order นี้
-    const [sellers] = await db.promise().query(
-        `SELECT DISTINCT p.seller_id 
-     FROM order_detail oi 
-     JOIN products p ON oi.product_id = p.product_id 
-     WHERE oi.order_id = ?`,
-        [orderId]
-    );
+    try {
+        // ดึง seller_id ของสินค้าที่อยู่ใน order นี้
+        const [sellers] = await db.promise().query(
+            `SELECT DISTINCT p.user_id AS seller_id
+             FROM order_detail oi 
+             JOIN products p ON oi.product_id = p.product_id 
+             WHERE oi.order_id = ?`,
+            [orderId]
+        );
 
-    const sellerMessage = `คุณมีคำสั่งซื้อสินค้าใหม่ใน Order ID: ${orderId} จากผู้ใช้ ${buyerId}`;
-    for (const seller of sellers) {
-        await db.promise().query(insertNoti, [seller.seller_id, sellerMessage, orderId]);
+        if (sellers && sellers.length > 0) {
+            const sellerMessage = `สินค้าของคุณได้รับคำสั่งซื้อใหม่`;
+            for (const seller of sellers) {
+                await db.promise().query(insertNoti, [seller.seller_id, sellerMessage, orderId]);
+            }
+        }
+    } catch (err) {
+        console.error("Error notifying sellers:", err);
     }
-
 }
+
 
 // จ่ายเงิน
 route.post('/checkout', upload.single('paymentSlip'), async (req, res) => {
@@ -567,17 +574,31 @@ route.post('/checkout', upload.single('paymentSlip'), async (req, res) => {
                 'UPDATE products SET stock = stock - ? WHERE product_id = ?',
                 [item.quantity, item.product_id]
             );
+
+            // บันทึก log การอัปเดต stock
+            logOrder(user_id, null, `อัปเดต stock ของสินค้า ${item.product_name} (-${item.quantity})`);
         }
 
-
-        // สร้างคำสั่งซื้อ (order_status = 'processing')
+        // สร้างคำสั่งซื้อ (order_status = 'pending_verification')
         const [orderResult] = await db.promise().query(
-            `INSERT INTO orders (user_id, seller_id, payment_status, quantity, order_status, total_amount, shippingAddress, order_date)
-             VALUES (?, ?, 'pending', ?, 'processing', ?, ?, NOW())`,
+            `INSERT INTO orders (
+                user_id, 
+                seller_id, 
+                payment_status, 
+                quantity, 
+                order_status, 
+                total_amount, 
+                shippingAddress, 
+                order_date
+            )
+            VALUES (?, ?, 'pending', ?, 'pending_verification', ?, ?, NOW())`,
             [user_id, sellerId, total_quantity, total_amount, shippingAddress]
         );
 
         const orderId = orderResult.insertId;
+
+        // บันทึก log การสั่งซื้อ
+        logOrder(user_id, orderId, "สั่งซื้อสินค้า");
 
         // เพิ่มข้อมูลการชำระเงิน (payment_status = 'paid')
         const [paymentResult] = await db.promise().query(
@@ -593,6 +614,11 @@ route.post('/checkout', upload.single('paymentSlip'), async (req, res) => {
             `UPDATE orders SET payment_id = ? WHERE order_id = ?`,
             [paymentId, orderId]
         );
+
+        // บันทึก log การอัปโหลดสลิป
+        if (slipPath) {
+        logOrder(user_id, orderId, "อัปโหลดสลิปการชำระเงิน");
+        }
 
         // เพิ่มรายละเอียดสินค้า
         const insertItems = sellerProducts.map(product =>
@@ -614,6 +640,7 @@ route.post('/checkout', upload.single('paymentSlip'), async (req, res) => {
 
         // แจ้งเตือนแอดมิน
         await notifyAdminNewOrder(orderId, user_id);
+
 
         res.status(200).json({ message: "สั่งซื้อสำเร็จ", orderId });
 

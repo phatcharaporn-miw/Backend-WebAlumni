@@ -85,6 +85,7 @@ var AdminAllRoute= require('./routes/admin');
 var alumniRoute= require('./routes/alumni');
 var activityRoute = require('./routes/activity'); 
 var ordersRoute = require('./routes/orders');
+var chatRouter = require('./routes/chat');
 
 app.use('/api', indexRouter);
 app.use('/users', usersRouter);
@@ -99,6 +100,7 @@ app.use('/alumni', alumniRoute);
 app.use('/activity', activityRoute); 
 app.use('/news', NewsRoute);
 app.use('/orders', ordersRoute);
+app.use('/chat', chatRouter); 
 
 //for admin
 app.use('/admin', AdminAllRoute);

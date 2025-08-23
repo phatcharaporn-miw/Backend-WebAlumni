@@ -1,11 +1,21 @@
 var db = require('./db'); 
 
+// log การ login
 function logUserAction(userId, action, ip) {
-  const queryUserlog = `INSERT INTO user_logs (user_id, action, ip_address) VALUES (?, ?, ?)`;
+  const queryUserlog = `
+    INSERT INTO user_logs (user_id, action, ip_address, timestamp) 
+    VALUES (?, ?, ?, NOW())
+    ON DUPLICATE KEY UPDATE 
+      action = VALUES(action),
+      ip_address = VALUES(ip_address),
+      timestamp = NOW()
+  `;
   db.query(queryUserlog, [userId, action, ip], (err) => {
     if (err) console.error('เกิดข้อผิดพลาดในการบันทึก log:', err);
   });
 }
+
+
 // activitylog
 function logActivity(userId, activityId, actionDetail) {
   const queryActivitylog = `INSERT INTO activitylog (activity_id, user_id, action) VALUES (?, ?, ?)`;
@@ -58,10 +68,15 @@ function logPayment(userId, payment_id, actionPayment, isApproved) {
     VALUES (?, ?, ?, ?, NOW())
   `;
   db.query(queryPaymentlog, [userId, payment_id, actionPayment, isApproved], (err) => {
-    if (err) console.error('เกิดข้อผิดพลาดในการบันทึก paymentlog:', err);
+    if (err) {
+      console.error('เกิดข้อผิดพลาดในการบันทึก paymentlog:', err);
+    } else {
+      console.log(`บันทึก paymentlog สำเร็จ: user ${userId}, action: ${actionPayment}`);
+    }
   });
 }
 
+// orderlog
 function logOrder(userId, orderId, actionOrder) {
   console.log('บันทึก order log:', { userId, orderId, actionOrder });
 

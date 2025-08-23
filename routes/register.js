@@ -51,11 +51,9 @@ router.post('/register', upload.single('image_path'), async (req, res) => {
         phone,
         line
     } = req.body;
-        
-    const image_path = `img/${req.file.filename}`;        
-    // console.log('Image Path:', image_path);
+    
+    const image_path = req.file ? `img/${req.file.filename}` : 'img/default-profile.png';
 
-     // ตรวจสอบรูปแบบรหัสผ่าน
     if (!validatePassword(password)) {
         return res.status(400).json({
             message: 'รหัสผ่านต้องมีอักขระพิมพ์ใหญ่ พิมพ์เล็ก และตัวเลข และต้องมีความยาวอย่างน้อย 8 ตัวอักษร',
@@ -63,65 +61,63 @@ router.post('/register', upload.single('image_path'), async (req, res) => {
     }
 
     try {
-        // ตรวจสอบว่ามีผู้ใช้นี้เคยลงทะเบียนแล้วหรือไม่
         const queryCheckUser = 'SELECT * FROM login WHERE username = ?';
         const [results] = await db.promise().query(queryCheckUser, [username]);
-
         if (results.length > 0) {
             return res.status(400).json({ message: "ชื่อผู้ใช้นี้มีผู้ใช้งานแล้ว!" });
         }
 
-        // สร้าง hash ของรหัสผ่าน
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // สร้างข้อมูลผู้ใช้ในตาราง users
-        const queryUser = 'INSERT INTO users (role_id, created_at, updated_at) VALUES (?, NOW(), NOW())';
-        const [userResult] = await db.promise().query(queryUser, [role]);
+        // กำหนด is_first_login
+        let isFirstLogin = 0; // default
+        if (parseInt(role) === 3) {
+            // role=3 สมัครเอง → ไม่บังคับเปลี่ยนรหัส
+            isFirstLogin = 0;
+        }
+
+        // สร้าง user
+        const queryUser = 'INSERT INTO users (role_id, is_first_login, created_at, updated_at) VALUES (?, ?, NOW(), NOW())';
+        const [userResult] = await db.promise().query(queryUser, [role, isFirstLogin]);
         const user_id = userResult.insertId;
 
-        // เพิ่มข้อมูลในตาราง login
+        // เพิ่ม login
         const queryLogin = 'INSERT INTO login (user_id, username, password) VALUES (?, ?, ?)';
         await db.promise().query(queryLogin, [user_id, username, hashedPassword]);
 
-        if (parseInt(role) === 1 || parseInt(role) === 2 || parseInt(role) === 4) {
-            // ลงข้อมูล profiles เฉพาะ role 1,2,4
+        // เพิ่ม profiles
+        if ([1,2,4].includes(parseInt(role))) {
             const queryProfile = `
                 INSERT INTO profiles (user_id, full_name, title, email, image_path)
                 VALUES (?, ?, ?, ?, ?)
             `;
-            await db.promise().query(queryProfile, [
-                user_id,
-                full_name,
-                title,
-                email,
-                image_path
-            ]);
-            console.log('เพิ่มข้อมูลใน profiles สำเร็จ');
+            await db.promise().query(queryProfile, [user_id, full_name, title, email, image_path]);
 
-            const educations = JSON.parse(req.body.education || '[]');
-            if (parseInt(role) === 4 && educations.length > 0) {
-                const edu = educations[0]; // สมมุติว่า role 4 มีแค่ 1 รายการ
-                const queryEducation = `
-                    INSERT INTO educations (user_id, degree_id, studentId, major_id, student_year)
-                    VALUES (?, ?, ?, ?, ?)
-                `;
-                await db.promise().query(queryEducation, [
-                    user_id,
-                    edu.degree || null,
-                    edu.studentId || null,
-                    edu.major || null,
-                    edu.student_year || null
-                ]);
-                console.log('เพิ่มข้อมูล education สำหรับ role 4 สำเร็จ');
+            if (parseInt(role) === 4) {
+                const educations = JSON.parse(req.body.education || '[]');
+                if (educations.length > 0) {
+                    const edu = educations[0];
+                    const queryEducation = `
+                        INSERT INTO educations (user_id, degree_id, studentId, major_id, student_year)
+                        VALUES (?, ?, ?, ?, ?)
+                    `;
+                    await db.promise().query(queryEducation, [
+                        user_id,
+                        edu.degree || null,
+                        edu.studentId || null,
+                        edu.major || null,
+                        edu.student_year || null
+                    ]);
+                }
             }
-
         } else if (parseInt(role) === 3) {
-            // ลงข้อมูล profile + alumni + educations สำหรับ role 3
+            // profiles + alumni + educations สำหรับ role 3 สมัครเอง
             const queryProfile = `
                 INSERT INTO profiles (
                     user_id, full_name, nick_name, title, birthday, address,
                     phone, line, email, image_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `;
             await db.promise().query(queryProfile, [
                 user_id,
                 full_name || null,
@@ -134,9 +130,9 @@ router.post('/register', upload.single('image_path'), async (req, res) => {
                 email || null,
                 image_path || null,
             ]);
-        
+
+            // ใส่ education
             const educations = JSON.parse(req.body.education || '[]');
-        
             if (Array.isArray(educations) && educations.length > 0) {
                 const queryEducation = `
                     INSERT INTO educations (user_id, degree_id, studentId, graduation_year, major_id)
@@ -150,30 +146,30 @@ router.post('/register', upload.single('image_path'), async (req, res) => {
                     edu.major || null,
                 ]);
                 await db.promise().query(queryEducation, [educationData]);
-                console.log('เพิ่มข้อมูล education สำเร็จ');
-            }
-            
-            const major = educations.length > 0 ? educations[0].major : null;
-            if (major) {
-                const queryAlumni = `INSERT INTO alumni (user_id, major_id) VALUES (?, ?)`;
-                await db.promise().query(queryAlumni, [user_id, major]);
-                console.log('เพิ่มข้อมูลใน alumni สำเร็จ');
+
+                // เพิ่ม alumni table
+                const major = educations[0].major;
+                if (major) {
+                    const queryAlumni = `INSERT INTO alumni (user_id, major_id) VALUES (?, ?)`;
+                    await db.promise().query(queryAlumni, [user_id, major]);
+                }
             }
         } else {
-            // ถ้า role ไม่ใช่ 1,2,3,4
             return res.status(400).json({ message: 'Role ที่เลือกไม่ถูกต้อง' });
-        }               
+        }
 
-            return res.status(201).json({ 
-                    message: 'ลงทะเบียนสำเร็จ',
-                    user_id: user_id
-            });
-                
-            } catch (err) {
-                console.error(err);
-                res.status(500).json({ message: 'ไม่สามารถลงทะเบียนได้' });
-            }
+        return res.status(201).json({
+            message: 'ลงทะเบียนสำเร็จ',
+            user_id: user_id
+        });
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: 'ไม่สามารถลงทะเบียนได้' });
+    }
 });
+
+
 
 //ดึงข้อมูลสาขามาแสดง
 router.get('/major', async (req, res) => {

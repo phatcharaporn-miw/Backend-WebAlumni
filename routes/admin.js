@@ -18,7 +18,8 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
-router.get('/', (req, res) => {
+// ส่วนของdonate 
+router.get('/donate', (req, res) => {
     const query = 'SELECT * FROM donationproject';
 
     db.query(query, (err, results) => {
@@ -131,6 +132,7 @@ router.put('/:id', (req, res) => {
     });
 });
 
+// เพิ่มสินค้าที่ระลึก
 router.post('/addsouvenir', upload.single('image'), (req, res) => {
     const { productName, description, price, stock, paymentMethod, bankName, accountNumber, accountName, promptpayNumber } = req.body;
     const user_id = req.body.user_id;
@@ -194,14 +196,14 @@ router.post('/addsouvenir', upload.single('image'), (req, res) => {
     });
 });
 
-
 router.get('/souvenir', (req, res) => {
     const query =
         `SELECT 
-        products.*, role.role_id
+        products.*, role.role_id , profiles.full_name
         FROM products 
         JOIN users ON products.user_id = users.user_id
         JOIN role ON users.role_id = role.role_id
+        JOIN profiles ON users.user_id = profiles.user_id
     `;
     db.query(query, (err, results) => {
         if (err) {
@@ -266,7 +268,7 @@ router.put('/approveSouvenir/:productId', (req, res) => {
             const approverName = approverResult[0].full_name;
             const approverRole = approverResult[0].role_name;
 
-            // 🟡 Step 1: Log ก่อน
+            // Step 1: Log ก่อน
             const insertLog = `
                 INSERT INTO product_approval_log (product_id, approver_id, approver_name, approver_role, action)
                 VALUES (?, ?, ?, ?, ?)
@@ -274,7 +276,7 @@ router.put('/approveSouvenir/:productId', (req, res) => {
             db.query(insertLog, [productId, approverId, approverName, approverRole, action], (err) => {
                 if (err) return res.status(500).json({ error: 'Error logging approval' });
 
-                // 🔔 Step 2: แจ้งเตือนเจ้าของ
+                // Step 2: แจ้งเตือนเจ้าของ
                 const message = action === 'approved'
                     ? `สินค้าของคุณ "${productName}" ได้รับการอนุมัติแล้ว!`
                     : `สินค้าของคุณ "${productName}" ถูกปฏิเสธและจะไม่ถูกแสดงบนเว็บไซต์`;
@@ -286,7 +288,7 @@ router.put('/approveSouvenir/:productId', (req, res) => {
                 db.query(notifyQuery, [ownerId, message, productId], (err) => {
                     if (err) return res.status(500).json({ error: 'Error sending notification' });
 
-                    // ✅ Step 3: อัปเดตหรือ ลบจริง
+                    // Step 3: อัปเดตหรือ ลบจริง
                     if (action === 'approved') {
                         db.query('UPDATE products SET status = ? WHERE product_id = ?', ['1', productId], (err) => {
                             if (err) return res.status(500).json({ error: 'Error updating product status' });
@@ -336,6 +338,7 @@ router.put('/editSouvenir/:id', (req, res) => {
     });
 });
 
+
 // ลบสินค้า
 router.delete('/deleteSouvenir/:id', (req, res) => {
     const productId = req.params.id;
@@ -373,7 +376,6 @@ router.delete('/deleteSouvenir/:id', (req, res) => {
         });
     });
 });
-
 
 // ดึงข้อมูลสรุปกิจกรรม
 router.get('/activity-summary', LoggedIn, checkActiveUser, (req, res) => {
@@ -759,7 +761,8 @@ router.get('/dashboard-stats', (req, res) => {
         }
         result.totalParticipants = participants[0].total;
 
-        db.query("SELECT COUNT(*) AS total FROM activity WHERE status = 2", (err, activities) => {
+        // status 1 = กำลังดำเนินการ
+        db.query("SELECT COUNT(*) AS total FROM activity WHERE status = 1", (err, activities) => {
             if (err) {
                 console.error('Error fetching activities:', err);
                 return res.status(500).json({ message: 'Internal server error' });

@@ -91,6 +91,7 @@ router.get('/news-all',(req, res) => {
     JOIN users ON news.user_id = users.user_id
     JOIN role ON users.role_id = role.role_id
     WHERE news.deleted_at IS NULL
+    ORDER BY news.created_at DESC
     `;
 
     db.query(queryNews, (err, results) => {

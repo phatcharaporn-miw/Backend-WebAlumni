@@ -506,7 +506,6 @@ router.post('/webboard/:postId/favorite', LoggedIn, checkActiveUser, (req, res) 
   const userId = req.session.user?.id;
 
   // ดึง full_name ของผู้ที่กดไลก์จากฐานข้อมูล
-  // const queryGetUser = `SELECT full_name FROM profiles WHERE user_id = ?`;
   const queryGetUser = `
       SELECT p.full_name, l.username, r.role_name 
       FROM profiles p
@@ -530,11 +529,11 @@ router.post('/webboard/:postId/favorite', LoggedIn, checkActiveUser, (req, res) 
     let likedBy;
 
     // ถ้าผู้ใช้เป็นศิษย์ปัจจุบัน ใช้ username, ถ้าเป็นศิษย์เก่าใช้ full_name
-    if (userRole === 4) {
-      likedBy = userResults[0].username;
-    } else {
-      likedBy = userResults[0].full_name;
-    }
+    // if (userRole === 4) {
+    //   likedBy = userResults[0].username;
+    // } else {
+    //   likedBy = userResults[0].full_name;
+    // }
 
     // ดึง user_id ของเจ้าของกระทู้
     const queryGetPostOwner = `SELECT user_id FROM webboard WHERE webboard_id = ?`;

@@ -5,8 +5,13 @@ const bcrypt = require('bcrypt');
 const nodemailer = require('nodemailer');
 const { logUserAction } = require('../logUserAction');
 
+
 router.post('/login', (req, res) => {
   const { username, password } = req.body;
+
+  if (!username || !password) {
+    return res.status(400).json({ success: false, message: 'กรุณากรอก username และ password' });
+  }
 
   const query = `
     SELECT login.*, role.role_id, profiles.image_path, users.is_active
@@ -29,9 +34,8 @@ router.post('/login', (req, res) => {
 
     const user = results[0];
 
-    // ตรวจสอบสถานะผู้ใช้ (is_active)
-    if (parseInt(user.is_active) === 0) {
-      return res.status(403).json({ success: false, message: "บัญชีของคุณถูกระงับการใช้งาน" });
+    if (!user.password) {
+      return res.status(500).json({ success: false, message: 'Password hash is missing in database' });
     }
 
     bcrypt.compare(password, user.password, (err, match) => {
@@ -43,37 +47,31 @@ router.post('/login', (req, res) => {
       if (!match) {
         return res.status(401).json({ success: false, message: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" });
       }
+
+      if (parseInt(user.is_active) === 0) {
+        return res.status(403).json({ success: false, message: "บัญชีของคุณถูกระงับการใช้งาน" });
+      }
+
       // บันทึก session
-      req.session.user = {
-        id: user.user_id,
-        username: user.username,
+      req.session.user = { id: user.user_id, username: user.username, role: user.role_id };
+
+      // บังคับเปลี่ยนรหัสครั้งแรกเฉพาะ alumni (role=3) ที่ถูกสร้างโดย admin
+      const firstLogin = parseInt(user.role_id) === 3 && user.is_first_login === 1;
+
+      res.json({
+        success: true,
+        message: 'เข้าสู่ระบบสำเร็จ!',
+        userId: user.user_id,
         role: user.role_id,
-      };
-
-      // บันทึก log login
-      const ip = req.ip;
-      logUserAction(user.user_id, 'login', ip);
-
-      req.session.save(err => {
-        if (err) {
-          console.error('Session save error:', err);
-          return res.status(500).json({ success: false, message: 'Session error' });
-        }
-
-        // ส่ง response กลับ
-        res.json({
-          success: true,
-          message: 'เข้าสู่ระบบสำเร็จ!',
-          userId: user.user_id,
-          role: user.role_id,
-          username: user.username,
-          image_path: user.image_path,
-          firstLogin: user.is_first_login === 1 
-        });
+        username: user.username,
+        image_path: user.image_path,
+        firstLogin
       });
     });
   });
 });
+
+
 
 // Logout Route
 router.get('/logout', (req, res) => {
@@ -119,9 +117,9 @@ router.post('/change-password', (req, res) => {
   const { userId, newPassword } = req.body;
 
   // ตรวจสอบข้อมูลที่รับมา
-    if (!userId || !newPassword) {
-        return res.status(400).send("Missing required fields");
-    }
+  if (!userId || !newPassword) {
+    return res.status(400).send("Missing required fields");
+  }
 
   bcrypt.hash(newPassword, 10, (err, hashedPassword) => {
     if (err) return res.status(500).send('Error hashing password');
