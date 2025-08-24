@@ -1,4 +1,3 @@
-
 const LoggedIn = (req, res, next) => {
   // console.log(" Session in LoggedIn middleware:", req.session);
   if (!req.session || !req.session.user) {

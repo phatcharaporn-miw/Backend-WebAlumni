@@ -4,11 +4,13 @@ const http = require("http");
 var path = require('path');
 var cookieParser = require('cookie-parser');
 var logger = require('morgan');
+const db = require('./db');
 var QRcode = require('qrcode');
 var generatePayload = require('promptpay-qr');
 var bodyParser = require('body-parser');
 const cors = require('cors');
 var passport = require('passport');
+
 const session = require('express-session');
 // const schedule = require('./routes/schedule');
 
@@ -28,6 +30,12 @@ app.use(express.urlencoded({ extended: false }));
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
+
+app.use(cors({
+    origin: 'http://localhost:3000', 
+    credentials: true, 
+}));
+
 app.set('trust proxy', 1);
 
 const allowedOrigins = ["http://localhost:3002", "http://localhost:3001"];
@@ -63,6 +71,9 @@ app.use(session({
   }
 }));
 
+app.use('/img', express.static(path.join(__dirname, 'img')));
+app.use('/images', express.static(path.join(__dirname, 'img')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 app.use(passport.initialize());
 app.use(passport.session());
@@ -88,9 +99,12 @@ var ordersRoute = require('./routes/orders');
 var chatRouter = require('./routes/chat');
 
 app.use('/api', indexRouter);
+app.use('/login', LoginRoute);
 app.use('/users', usersRouter);
 app.use('/add', registerRouter);
 app.use('/donate', DonateRoute);
+
+app.use('/admin', AdminRoute);
 app.use('/souvenir',SouvenirRoute);
 app.use('/web', webboardRouter);
 app.use('/notice', notificationRoute);
@@ -122,6 +136,5 @@ app.use(function (err, req, res, next) {
 app.listen(3001, () => {
   console.log(`Server running on port 3001`);
 });
-
 
 module.exports = app;
