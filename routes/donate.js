@@ -239,7 +239,6 @@ route.post('/donation', upload.single('slip'), async (req, res) => {
             (project_id, user_id, amount, payment_status, slip, tax_id, use_tax)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         `;
-
         const donationResult = await queryAsync(insertDonationQuery, [
             projectId,
             userId,
@@ -279,7 +278,6 @@ route.get("/tax_addresses/user/:userId", async (req, res) => {
         res.status(500).json({ error: "Internal server error" });
     }
 });
-
 
 route.get("/donatePaid", authenticateUser, (req, res) => {
     console.log(">>> /donatePaid route called");
@@ -321,6 +319,43 @@ cron.schedule('* * * * *', () => {
 });
 
 // สร้าง QR Code สำหรับการบริจาคผ่าน PromptPay
+    let taxData = null;
+    if (name && address && taxId) {
+        taxData = [name, address, taxId];
+    }
+
+    const query = `
+        INSERT INTO donations 
+        (project_id, user_id, amount, payment_status, slip, name, address, tax_id) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+    const values = [projectId, userId, amount, "pending", slip, name || null, address || null, taxId || null];
+
+    db.query(query, values, (err, result) => {
+        if (err) {
+            console.error('Error inserting donation:', err);
+            return res.status(500).json({ error: `Error inserting donation: ${err.message}` });
+        }
+
+        const updateQuery = `
+            UPDATE donationproject 
+            SET current_amount = current_amount + ? 
+            WHERE project_id = ?
+        `;
+        const updateValues = [amount, projectId];
+
+        db.query(updateQuery, updateValues, (err, updateResult) => {
+            if (err) {
+                console.error('Error updating current_amount in donationproject:', err);
+                return res.status(500).json({ error: `Error updating current_amount: ${err.message}` });
+            }
+
+            res.status(200).json({ message: 'Donation completed successfully', donationId: result.insertId });
+        });
+    });
+});
+
+// เส้นทางสำหรับการสร้าง QR Code
 route.post('/generateQR', (req, res) => {
     const amount = parseFloat(req.body.amount);
 
@@ -355,6 +390,5 @@ route.post('/generateQR', (req, res) => {
         });
     });
 });
-
 
 module.exports = route;

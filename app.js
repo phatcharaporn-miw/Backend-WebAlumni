@@ -1,32 +1,23 @@
 var createError = require('http-errors');
 var express = require('express');
+const http = require("http");
 var path = require('path');
 var cookieParser = require('cookie-parser');
 var logger = require('morgan');
 const db = require('./db');
-var app = express();  // ใช้แค่ประกาศ app ตัวเดียว
-
+var QRcode = require('qrcode');
+var generatePayload = require('promptpay-qr');
 var bodyParser = require('body-parser');
-var cors = require('cors');
+const cors = require('cors');
 var passport = require('passport');
-var session = require('express-session');
-var MySQLStore = require('express-mysql-session')(session);
+
+const session = require('express-session');
+// const schedule = require('./routes/schedule');
+
+require('./routes/schedule');
 require('dotenv').config();
 
-const sessionStore = new MySQLStore({}, db);
-
-app.use(session({
-  secret: process.env.SESSION_SECRET,
-  resave: false,
-  saveUninitialized: false,
-  store: sessionStore,
-  cookie: {
-    secure: false,  // ปรับเป็น false ในการทดสอบ
-    httpOnly: true,
-    sameSite: 'lax',
-    maxAge: 24 * 60 * 60 * 1000,  // 1 วัน
-  }
-}));
+const app = express(); 
 
 // View engine setup
 app.set('views', path.join(__dirname, 'views'));
@@ -45,7 +36,40 @@ app.use(cors({
     credentials: true, 
 }));
 
+app.set('trust proxy', 1);
 
+const allowedOrigins = ["http://localhost:3002", "http://localhost:3001"];
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
+
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use('/img', express.static('img'));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+app.use(session({
+  secret: process.env.SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === "production", // ใช้ HTTPS เท่านั้นใน production
+    httpOnly: true, // ป้องกันการเข้าถึง cookie จาก JS
+    sameSite: 'lax', // หรือ 'strict' เพื่อป้องกัน CSRF
+    maxAge: 1000 * 60 * 60, 
+  }
+}));
 
 app.use('/img', express.static(path.join(__dirname, 'img')));
 app.use('/images', express.static(path.join(__dirname, 'img')));
@@ -54,22 +78,46 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use(passport.initialize());
 app.use(passport.session());
 
-// โหลด Router
+passport.serializeUser((user, done) => done(null, user));
+passport.deserializeUser((obj, done) => done(null, obj));
+
+// route
 var indexRouter = require('./routes/index');
 var usersRouter = require('./routes/users');
 var registerRouter = require('./routes/register');
+var webboardRouter = require('./routes/webboard');
 var DonateRoute = require('./routes/donate');
-var AdminRoute = require('./routes/admin');
 var SouvenirRoute = require('./routes/souvenir');
-var LoginRoute = require('./routes/login');
+var NewsRoute =  require('./routes/news');
+var notificationRoute =  require('./routes/notification');
+var categoryRoute =  require('./routes/category');
+var searchRoute =  require('./routes/search');
+var AdminAllRoute= require('./routes/admin');
+var alumniRoute= require('./routes/alumni');
+var activityRoute = require('./routes/activity'); 
+var ordersRoute = require('./routes/orders');
+var chatRouter = require('./routes/chat');
 
 app.use('/api', indexRouter);
 app.use('/login', LoginRoute);
 app.use('/users', usersRouter);
 app.use('/add', registerRouter);
 app.use('/donate', DonateRoute);
-app.use('/souvenir', SouvenirRoute);
+
 app.use('/admin', AdminRoute);
+app.use('/souvenir',SouvenirRoute);
+app.use('/web', webboardRouter);
+app.use('/notice', notificationRoute);
+app.use('/category', categoryRoute);
+app.use('/search', searchRoute);
+app.use('/alumni', alumniRoute);
+app.use('/activity', activityRoute); 
+app.use('/news', NewsRoute);
+app.use('/orders', ordersRoute);
+app.use('/chat', chatRouter); 
+
+//for admin
+app.use('/admin', AdminAllRoute);
 
 // 404 error handler
 app.use(function (req, res, next) {
