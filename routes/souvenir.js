@@ -34,7 +34,7 @@ route.get('/', (req, res) => {
     JOIN role ON users.role_id = role.role_id
     WHERE status = "1"
     `;
-
+  
     db.query(query, (err, results) => {
         if (err) {
             console.error('Database query failed:', err);
@@ -66,6 +66,13 @@ route.get('/souvenirDetail/:id', (req, res) => {
             return res.status(404).json({ error: 'Product not found' });
         }
 
+
+        res.status(200).json(results[0]);
+    });
+});
+
+route.post('/addsouvenir', upload.single('image'), (req, res) => {
+    const { productName, description, price, stock } = req.body;
         res.status(200).json({
             ...results[0],
             out_of_stock: results[0].stock <= 0
@@ -281,6 +288,60 @@ route.get('/cart/count', (req, res) => {
             console.error('Error fetching cart count:', err);
             return res.status(500).json({ error: 'Database error' });
         }
+      
+        res.status(200).json({ message: 'Product added successfully' });
+    });
+});
+
+// ดึงตะกร้ามาจ้า
+route.get('/cart', (req, res) => {
+    const user_id = req.query.user_id;
+
+    if (!user_id) {
+        return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    const query = `
+        SELECT cart.*, products.product_id, products.product_name, users.user_id, 
+        products.price,products.image
+        FROM cart
+        JOIN users ON cart.user_id = users.user_id
+        JOIN products ON cart.product_id = products.product_id
+        WHERE cart.user_id = ?
+    `;
+
+    db.query(query, [user_id], (err, results) => {
+        if (err) {
+            console.error('Error executing query:', err);  // เพิ่ม log ข้อผิดพลาด
+            return res.status(500).json({ error: 'Error fetching cart details', details: err });
+        }
+
+        res.status(200).json(results.length > 0 ? results : []);
+    });
+});
+
+route.put("/cart/update", (req, res) => {
+    const { user_id, product_id, quantity } = req.body;
+
+    if (!user_id || !product_id || quantity < 1) {
+        return res.status(400).json({ message: "ข้อมูลไม่ถูกต้อง" });
+    }
+
+    const sql = "UPDATE cart SET quantity = ? WHERE user_id = ? AND product_id = ?";
+    db.query(sql, [quantity, user_id, product_id], (err, result) => {
+        if (err) {
+            console.error("Error updating cart:", err);
+            return res.status(500).json({ message: "เกิดข้อผิดพลาด" });
+        }
+        res.json({ message: "อัปเดตจำนวนสินค้าเรียบร้อย" });
+    });
+});
+
+
+route.post('/cart/add', (req, res) => {
+    const { product_id, quantity, user_id, total } = req.body;
+
+    // ตรวจสอบค่าที่ได้รับ
         console.log("จำนวนสินค้าในตะกร้า:", results[0].cartCount);
         res.json({ cartCount: results[0].cartCount || 0 });
     });
@@ -345,6 +406,46 @@ route.post('/cart/add', (req, res) => {
     if (!product_id || !quantity || !user_id || isNaN(total)) {
         return res.status(400).send("ข้อมูลไม่ครบถ้วนหรือค่าผิดพลาด");
     }
+
+    const query = `UPDATE cart SET quantity = ?, total = ? WHERE user_id = ? AND product_id = ?`;
+
+    db.query(query, [quantity, total, user_id, product_id], (err, result) => {
+        if (err) {
+            console.error("Error updating cart:", err);
+            return res.status(500).send("Error updating cart");
+        }
+
+        if (result.affectedRows === 0) {
+            const insertQuery = `INSERT INTO cart (user_id, product_id, quantity, total) VALUES (?, ?, ?, ?)`;
+            db.query(insertQuery, [user_id, product_id, quantity, total], (err, result) => {
+                if (err) {
+                    console.error("Error inserting into cart:", err);
+                    return res.status(500).send("Error adding to cart");
+                }
+                res.send("เพิ่มสินค้าเข้าตะกร้าแล้ว!");
+            });
+        } else {
+            res.send("ตะกร้าของคุณถูกอัปเดตแล้ว!");
+        }
+    });
+});
+
+
+
+// สำหรับลบสินค้าในตะกร้า
+route.delete('/cart/:productId', (req, res) => {
+    const { productId } = req.params;
+    const deleteQuery = 'DELETE FROM cart WHERE product_id = ?';
+
+    db.query(deleteQuery, [productId], (err, results) => {
+        if (err) {
+            console.error("Error deleting item:", err);
+            return res.status(500).json({ error: "Error deleting item from cart" });
+        }
+
+        res.status(200).json({ message: "Item deleted from cart" });
+    });
+});
 
     // เริ่ม Transaction
     db.beginTransaction(err => {

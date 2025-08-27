@@ -25,6 +25,14 @@ const authenticateUser = (req, res, next) => {
     return res.status(401).json({ error: 'Unauthorized' });
 };
 
+const authenticateUser = (req, res, next) => {
+    if (req.session && req.session.user) {
+        req.user = req.session.user;
+        return next();
+    }
+    return res.status(401).json({ error: 'Unauthorized' });
+};
+
 const upload = multer({ storage: storage });
 
 // ดึงโครงการทั้งหมด
@@ -76,6 +84,15 @@ route.get('/donatedetail/:id', (req, res) => {
         WHERE donationproject.project_id = ?
     `;
 
+    const query = `
+        SELECT donationproject.*, profiles.full_name AS creator_name, users.role_id AS creator_role
+        FROM donationproject
+        JOIN profiles ON donationproject.user_id = profiles.user_id
+        JOIN users ON donationproject.user_id = users.user_id
+        
+        WHERE donationproject.project_id = ?
+    `;
+
     db.query(query, [projectId], (err, results) => {
         if (err) {
             console.error('Error fetching project details:', err);
@@ -100,6 +117,7 @@ route.post('/donateRequest', upload.single('image'), (req, res) => {
 
     const { projectName, description, targetAmount, startDate, endDate, donationType, currentAmount,
         bankName, accountName, accountNumber, numberPromtpay, forThings, typeThings, quantityThings } = req.body;
+        bankName, accountName, accountNumber, numberPromtpay, forThings, typeThings, quantityThings } = req.body;
 
     const image = req.file ? req.file.filename : null;
     if (!image) {
@@ -115,6 +133,7 @@ route.post('/donateRequest', upload.single('image'), (req, res) => {
 
     const values = [
         projectName,
+        userId,
         userId,
         description,
         startDate,

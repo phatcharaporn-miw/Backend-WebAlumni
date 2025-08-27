@@ -48,11 +48,54 @@ router.get('/donatedetail/:id', (req, res) => {
     });
 });
 
-router.post('/donateRequest', upload.single('image'), (req, res) => {
-    const { projectName, description, targetAmount, startDate, endDate, donationType, currentAmount, bankName, accountNumber, numberPromtpay, roleId } = req.body;
+// อนุมัติการบริจาคให้ตั้งโครงการ
+route.put('/approveDonate/:id', (req, res) => {
+    const projectId = req.params.id;
+    const query = 'UPDATE donationproject SET status = "1" WHERE project_id = ?';
+    db.query(query, [projectId], (err, result) => {
+        if (err) {
+            console.error('Error updating project status:', err);
+            return res.status(500).json({ error: 'Database error' });
+        }
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'Project not found or already approved' });
+        }
+        console.log(`Project ${projectId} approved successfully`);
+        res.status(200).json({
+            message: 'Project approved successfully',
+            projectId: projectId
+        });
+    });
+});
 
-    if (roleId !== '1') {
-        return res.status(403).json({ error: 'ไม่ได้รับอนุญาต' });
+// ลบโครงการบริจาค
+route.delete('/donate/:id', (req, res) => {
+    const projectId = req.params.id;
+    const query = 'DELETE FROM donationproject WHERE project_id = ?';
+
+    db.query(query, [projectId], (err, results) => {
+        if (err) {
+            console.error('Error deleting project:', err);
+            return res.status(500).json({ error: 'Error deleting project' });
+        }
+
+        if (results.affectedRows === 0) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+
+        res.status(200).json({ message: 'Project deleted successfully' });
+    });
+});
+
+// เพิ่มโครงการบริจาค
+route.post('/donateRequest', upload.single('image'), (req, res) => {
+    const { userId, projectName, description, targetAmount, startDate, endDate,
+        donationType, currentAmount, bankName, accountName, accountNumber, numberPromtpay,
+        userRole, typeThing, quantity_things, forThings } = req.body;
+
+    if (userRole !== "1") {
+        console.log("Unauthorized access attempt by user role:", userRole);
+        return res.status(403).json({ error: 'Unauthorized access, only admins can add donation projects' });
     }
 
     if (!req.file) {
@@ -60,6 +103,9 @@ router.post('/donateRequest', upload.single('image'), (req, res) => {
     }
 
     const image = req.file.filename;
+
+    // แปลง currentAmount เป็น number และกำหนด default เป็น 0
+    const currentAmountValue = currentAmount ? Number(currentAmount) : 0;
 
     const query = `
         INSERT INTO donationproject 
@@ -69,17 +115,22 @@ router.post('/donateRequest', upload.single('image'), (req, res) => {
     `;
 
     const values = [
+        userId,
         projectName,
         description,
         startDate,
         endDate,
         donationType,
         image,
-        targetAmount,
-        currentAmount,
+        targetAmount || null,
+        currentAmountValue,
         bankName,
+        accountName,
         accountNumber,
         numberPromtpay,
+        typeThing || null,
+        quantity_things || null,
+        forThings || null,
         '1'
     ];
 
@@ -706,6 +757,7 @@ router.post('/addsouvenir', upload.single('image'), (req, res) => {
     });
 });
 
+// ขายของที่ระลึก
 router.get('/souvenir', (req, res) => {
     const query =
         `SELECT 
@@ -723,6 +775,7 @@ router.get('/souvenir', (req, res) => {
         res.json(results);
     });
 });
+
 
 // เปลี่ยนสถานะสินค้าให้เป็นสถานะ 1จาก 0
 router.put('/updateSouvenir/:id', (req, res) => {
@@ -822,7 +875,6 @@ router.put('/approveSouvenir/:productId', (req, res) => {
     });
 });
 
-
 // แก้ไขข้อมูลสินค้า
 router.put('/editSouvenir/:id', (req, res) => {
     const productId = req.params.id;
@@ -851,7 +903,6 @@ router.put('/editSouvenir/:id', (req, res) => {
         res.status(200).json({ message: 'Product updated successfully' });
     });
 });
-
 
 // ลบสินค้า
 router.delete('/deleteSouvenir/:id', (req, res) => {
@@ -1326,7 +1377,5 @@ router.get('/notification-counts', (req, res) => {
         });
     });
 });
-
-
 
 module.exports = router;

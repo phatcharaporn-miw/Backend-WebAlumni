@@ -37,33 +37,6 @@ router.get('/profile', LoggedIn, checkActiveUser, (req, res) => {
   if (!req.session.user || !req.session.user.id) {
     return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
   }
-
-  const userId = req.session.user.id;
-
-  // ดึงข้อมูลโปรไฟล์หลัก
-  const profileQuery = `
-      SELECT 
-          users.user_id, 
-          users.role_id, 
-          profiles.full_name, 
-          profiles.image_path,
-          profiles.nick_name,
-          profiles.title,
-          profiles.birthday,
-          profiles.self_description,
-          profiles.address,
-          profiles.phone,
-          profiles.email,
-          profiles.line,
-          alumni.major_id,
-          major.major_name AS alumni_major_name
-      FROM users
-      JOIN profiles ON users.user_id = profiles.user_id
-      LEFT JOIN alumni ON users.user_id = alumni.user_id
-      LEFT JOIN major ON alumni.major_id = major.major_id
-      WHERE users.user_id = ? 
-  `;
-
   // ดึงข้อมูล educations ของ user
   const educationQuery = `
       SELECT 
@@ -87,7 +60,6 @@ router.get('/profile', LoggedIn, checkActiveUser, (req, res) => {
       console.error('Database error (profile):', err);
       return res.status(500).json({ success: false, message: 'Database error' });
     }
-
     if (profileResults.length === 0) {
       return res.status(404).json({ success: false, message: 'ไม่พบผู้ใช้' });
     }
@@ -99,7 +71,7 @@ router.get('/profile', LoggedIn, checkActiveUser, (req, res) => {
         console.error('Database error (educations):', err);
         return res.status(500).json({ success: false, message: 'Database error' });
       }
-
+      
       res.json({
         success: true,
         user: {
