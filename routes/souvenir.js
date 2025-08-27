@@ -179,6 +179,10 @@ route.post('/addsouvenir', upload.single('image'), (req, res) => {
                 const notifyQuery = `
                     INSERT INTO notifications (user_id, type, message)
                     VALUES ? 
+                    ON DUPLICATE KEY UPDATE 
+                    message = VALUES(message),
+                    send_date = NOW(),
+                    status = 'ยังไม่อ่าน';
                 `;
 
                 db.query(`SELECT user_id FROM users WHERE role_id IN (1, 2)`, (err, resultUsers) => {
@@ -452,6 +456,10 @@ async function notifyAdminNewOrder(orderId, buyerId) {
     const insertNoti = `
         INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
         VALUES (?, 'order', ?, ?, NOW(), 'ยังไม่อ่าน')
+        ON DUPLICATE KEY UPDATE 
+            message = VALUES(message),
+            send_date = NOW(),
+            status = 'ยังไม่อ่าน';
     `;
 
     try {

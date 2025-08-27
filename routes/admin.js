@@ -1,11 +1,12 @@
-
 const express = require("express");
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const db = require('../db');
+const moment = require('moment');
 var { LoggedIn, checkActiveUser } = require('../middlewares/auth');
-const { logUserAction, logManage } = require('../logUserAction');
+const { logManage, logDonation } = require('../logUserAction');
+const { log } = require("console");
 
 // ตั้งค่า Multer สำหรับอัปโหลดไฟล์
 const storage = multer.diskStorage({
@@ -60,11 +61,11 @@ router.post('/donateRequest', upload.single('image'), (req, res) => {
 
     const image = req.file.filename;
 
-    const query =
-        `INSERT INTO donationproject 
-    (project_name, description, start_date, end_date, donation_type, image_path, 
-    target_amount, current_amount, bank_name, account_number, number_promtpay, role_id) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    const query = `
+        INSERT INTO donationproject 
+        (project_name, description, start_date, end_date, donation_type, image_path, 
+        target_amount, current_amount, bank_name, account_number, number_promtpay, role_id) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     const values = [
@@ -87,10 +88,169 @@ router.post('/donateRequest', upload.single('image'), (req, res) => {
             console.error('Error inserting donation project:', err);
             return res.status(500).json({ error: 'Error inserting donation project' });
         }
+
+        // แจ้งเตือนแอดมิน 
+        const notifyQuery = `
+            INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
+            VALUES (?, 'ขอตั้งโครงการ', ?, ?, NOW(), 'ยังไม่อ่าน')
+            ON DUPLICATE KEY UPDATE 
+            message = VALUES(message),
+            send_date = NOW(),
+            status = 'ยังไม่อ่าน'
+        `;
+
+        const notifyValues = [
+            1, // user_id ของ admin
+            `มีการขอเพิ่มโครงการใหม่: ${projectName}`,
+            result.insertId // เก็บ id ของโครงการที่เพิ่ง insert
+        ];
+
+        db.query(notifyQuery, notifyValues, (notifyErr) => {
+            if (notifyErr) {
+                console.error("Error inserting notification:", notifyErr);
+            }
+        });
+
         res.status(201).json({ message: 'Donation project added successfully' });
     });
 });
 
+
+// อนุมัติการบริจาคให้ตั้งโครงการ
+router.put('/approveDonate/:id', (req, res) => {
+    const projectId = req.params.id;
+
+    // อัปเดตสถานะโครงการ
+    const query = 'UPDATE donationproject SET status = "1" WHERE project_id = ?';
+    db.query(query, [projectId], (err, result) => {
+        if (err) {
+            console.error('Error updating project status:', err);
+            return res.status(500).json({ error: 'Database error' });
+        }
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'Project not found or already approved' });
+        }
+
+        console.log(`Project ${projectId} approved successfully`);
+
+        // ดึง user_id ของเจ้าของโครงการ
+        const getUserQuery = 'SELECT user_id, project_name FROM donationproject WHERE project_id = ?';
+        db.query(getUserQuery, [projectId], (userErr, userResult) => {
+            if (userErr) {
+                console.error('Error fetching project owner:', userErr);
+                return res.status(500).json({ error: 'Database error' });
+            }
+
+            if (userResult.length === 0) {
+                return res.status(404).json({ error: 'Project not found after update' });
+            }
+
+            const userId = userResult[0].user_id;
+            const projectName = userResult[0].project_name;
+
+            // เพิ่มการแจ้งเตือน
+            const notifyQuery = `
+                INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
+                VALUES (?, 'อนุมัติโครงการ', ?, ?, NOW(), 'ยังไม่อ่าน')
+            `;
+            const notifyValues = [
+                userId,
+                `โครงการ "${projectName}" ของคุณได้รับการอนุมัติแล้ว`,
+                projectId
+            ];
+
+            db.query(notifyQuery, notifyValues, (notifyErr) => {
+                if (notifyErr) {
+                    console.error("Error inserting notification:", notifyErr);
+                }
+            });
+
+            // ส่ง response กลับไป
+            res.status(200).json({
+                message: 'Project approved and user notified successfully',
+                projectId: projectId
+            });
+        });
+    });
+});
+
+
+// ลบโครงการบริจาค
+router.delete('/donate/:id', (req, res) => {
+    const projectId = req.params.id;
+    const query = 'DELETE FROM donationproject WHERE project_id = ?';
+
+    db.query(query, [projectId], (err, results) => {
+        if (err) {
+            console.error('Error deleting project:', err);
+            return res.status(500).json({ error: 'Error deleting project' });
+        }
+
+        if (results.affectedRows === 0) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+
+        res.status(200).json({ message: 'Project deleted successfully' });
+    });
+});
+
+// เพิ่มโครงการบริจาค
+router.post('/donateRequest', upload.single('image'), (req, res) => {
+    const { userId, projectName, description, targetAmount, startDate, endDate,
+        donationType, currentAmount, bankName, accountName, accountNumber, numberPromtpay,
+        userRole, typeThing, quantity_things, forThings } = req.body;
+
+    if (userRole !== "1") {
+        console.log("Unauthorized access attempt by user role:", userRole);
+        return res.status(403).json({ error: 'Unauthorized access, only admins can add donation projects' });
+    }
+
+    if (!req.file) {
+        return res.status(400).json({ error: 'Image is required' });
+    }
+
+    const image = req.file.filename;
+
+    // แปลง currentAmount เป็น number และกำหนด default เป็น 0
+    const currentAmountValue = currentAmount ? Number(currentAmount) : 0;
+
+    const query =
+        `INSERT INTO donationproject 
+    (user_id, project_name, description, start_date, end_date, donation_type, image_path, 
+    target_amount, current_amount, bank_name,account_name, account_number, number_promtpay,type_things,quantity_things,for_things, status) 
+    VALUES (? ,?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+
+    const values = [
+        userId,
+        projectName,
+        description,
+        startDate,
+        endDate,
+        donationType,
+        image,
+        targetAmount || null,
+        currentAmountValue,
+        bankName,
+        accountName,
+        accountNumber,
+        numberPromtpay,
+        typeThing || null,
+        quantity_things || null,
+        forThings || null,
+        '1'
+    ];
+
+    db.query(query, values, (err, result) => {
+        if (err) {
+            console.error('Error inserting donation project:', err);
+            return res.status(500).json({ error: 'Error inserting donation project' });
+        }
+        res.status(201).json({ message: 'Donation project added successfully' });
+    });
+});
+
+// ลบโครงการบริจาค
 router.delete('/:id', (req, res) => {
     const projectId = req.params.id;
     if (!projectId) {
@@ -109,7 +269,356 @@ router.delete('/:id', (req, res) => {
     });
 });
 
+// const moment = require('moment');
+// แก้ไขโครงการบริจาค
+router.put('/editDonate/:id', upload.single('image'), (req, res) => {
+    const projectId = req.params.id;
+    const {
+        project_name,
+        description,
+        target_amount,
+        start_date,
+        end_date,
+        donation_type,
+        current_amount,
+        bank_name,
+        account_number,
+        number_promtpay
+    } = req.body;
 
+    db.query('SELECT status, start_date, end_date FROM donationproject WHERE project_id = ?', [projectId], (err, result) => {
+        if (err) {
+            console.error('Error fetching project status:', err);
+            return res.status(500).json({ success: false, error: 'Database error' });
+        }
+
+        if (result.length === 0) {
+            return res.status(404).json({ success: false, error: 'Project not found' });
+        }
+
+        const oldStatus = parseInt(result[0].status);
+        let newStatus = oldStatus; // เริ่มต้นด้วยสถานะเดิม
+
+        // เช็กว่าโครงการสิ้นสุดแล้วหรือไม่
+        if (oldStatus === 3) {
+            // ไม่อนุญาตให้เปลี่ยนวันที่
+            if (
+                start_date !== result[0].start_date ||
+                end_date !== result[0].end_date
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Cannot modify start/end date of a completed project.'
+                });
+            }
+            // สถานะยังคงเป็น 3
+        } else {
+            // คำนวณสถานะใหม่ตามวันที่
+            const now = moment();
+            const startDateMoment = moment(start_date);
+            const endDateMoment = moment(end_date);
+
+            if (now.isBefore(startDateMoment, 'day')) {
+                newStatus = 0; // ยังไม่เริ่ม
+            } else if (now.isBetween(startDateMoment, endDateMoment, 'day', '[]')) {
+                newStatus = 1; // กำลังดำเนินการ
+            } else {
+                newStatus = 3; // สิ้นสุดแล้ว
+            }
+        }
+
+        let query, values;
+
+        if (req.file) {
+            query = `
+                UPDATE donationproject 
+                SET project_name = ?, description = ?, target_amount = ?, start_date = ?, end_date = ?, 
+                    donation_type = ?, current_amount = ?, bank_name = ?, account_number = ?, 
+                    number_promtpay = ?, status = ?, image_path = ?
+                WHERE project_id = ?
+            `;
+            values = [
+                project_name,
+                description,
+                target_amount,
+                start_date,
+                end_date,
+                donation_type,
+                current_amount || 0,
+                bank_name,
+                account_number,
+                number_promtpay || null,
+                newStatus,
+                req.file.filename,
+                projectId
+            ];
+        } else {
+            query = `
+                UPDATE donationproject 
+                SET project_name = ?, description = ?, target_amount = ?, start_date = ?, end_date = ?, 
+                    donation_type = ?, current_amount = ?, bank_name = ?, account_number = ?, 
+                    number_promtpay = ?, status = ?
+                WHERE project_id = ?
+            `;
+            values = [
+                project_name,
+                description,
+                target_amount,
+                start_date,
+                end_date,
+                donation_type,
+                current_amount || 0,
+                bank_name,
+                account_number,
+                number_promtpay || null,
+                newStatus,
+                projectId
+            ];
+        }
+
+        db.query(query, values, (err, result) => {
+            if (err) {
+                console.error('Error updating donation project:', err);
+                return res.status(500).json({
+                    success: false,
+                    error: 'Error updating donation project'
+                });
+            }
+
+            if (result.affectedRows === 0) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Project not found'
+                });
+            }
+
+            res.status(200).json({
+                success: true,
+                message: 'Donation project updated successfully',
+                projectId: projectId,
+                imageUpdated: !!req.file,
+                status: newStatus
+            });
+        });
+    });
+});
+
+// ตรวจสอบการชำระเงินบริจาคทั้งหมด
+router.get('/check-payment-donate', (req, res) => {
+    const query = `
+        SELECT 
+            d.donation_id,
+            d.amount,
+            d.created_at AS start_date,
+            d.payment_status,
+            d.slip,
+            dp.project_name,
+            dp.account_name,
+            dp.bank_name,
+            dp.account_number,
+            dp.number_promtpay,
+            p.full_name AS donor_name,
+            CONCAT('DONATE-', d.donation_id) AS order_number
+        FROM donations d
+        LEFT JOIN donationproject dp ON d.project_id = dp.project_id
+        LEFT JOIN profiles p ON d.user_id = p.user_id
+        WHERE d.deleted_at IS NULL AND d.payment_status = 'pending'
+        ORDER BY d.created_at DESC
+    `;
+
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error('Database query failed:', err);
+            return res.status(500).json({ error: 'Database query failed' });
+        }
+        res.json(results);
+    });
+});
+
+
+// ดึงรายละเอียดการชำระเงินจาก donation_id
+router.get('/check-payment-donate/:id', (req, res) => {
+    const donationId = req.params.id;
+
+    const query = `
+        SELECT 
+            d.donation_id,
+            d.amount,
+            d.created_at,
+            d.payment_status,
+            d.slip AS proof_image,
+            p.full_name AS donor_name,
+            dp.project_name,
+            dp.account_name,
+            dp.bank_name,
+            dp.account_number,
+            dp.number_promtpay,
+            CONCAT('DONATE-', d.donation_id) AS order_number
+        FROM donations d
+        LEFT JOIN donationproject dp ON d.project_id = dp.project_id
+        LEFT JOIN profiles p ON d.user_id = p.user_id
+        WHERE d.donation_id = ?
+    `;
+
+    db.query(query, [donationId], (err, results) => {
+        if (err) {
+            console.error("Database error:", err);
+            return res.status(500).json({ message: "เกิดข้อผิดพลาดในการดึงข้อมูล" });
+        }
+
+        if (results.length === 0) {
+            return res.status(404).json({ message: "ไม่พบข้อมูลการบริจาคนี้" });
+        }
+
+
+        res.json(results[0]); // ส่งข้อมูลรายการเดียวกลับ
+    });
+});
+
+
+// อนุมัติการชำระเงินและอัปเดตยอดเงินโครงการ
+router.put('/check-payment-donate/approve/:donationId', (req, res) => {
+    const donationId = req.params.donationId;
+    const userId = req.body.user_id; // ID ของแอดมินที่อนุมัติ
+
+    // ดึงข้อมูล donation ก่อน (รวม user_id ของผู้บริจาค)
+    const getDonationSql = `
+        SELECT amount, project_id, user_id 
+        FROM donations 
+        WHERE donation_id = ? AND deleted_at IS NULL
+    `;
+
+    db.query(getDonationSql, [donationId], (err, donationResult) => {
+        if (err) {
+            console.error('Failed to fetch donation:', err);
+            return res.status(500).json({ success: false, message: 'Failed to fetch donation' });
+        }
+        if (!donationResult.length) {
+            return res.status(404).json({ success: false, message: 'Donation not found' });
+        }
+
+        const donation = donationResult[0];
+
+        // อัปเดตยอดเงินในโครงการ
+        const updateProjectSql = `
+            UPDATE donationproject 
+            SET current_amount = current_amount + ? 
+            WHERE project_id = ?
+        `;
+
+        db.query(updateProjectSql, [donation.amount, donation.project_id], (err2) => {
+            if (err2) {
+                console.error('Failed to update project amount:', err2);
+                return res.status(500).json({ success: false, message: 'Failed to update project amount' });
+            }
+
+            // อัปเดตสถานะการชำระเงินของ donation
+            const updateDonationSql = `
+                UPDATE donations 
+                SET payment_status = 'paid' 
+                WHERE donation_id = ?
+            `;
+
+            db.query(updateDonationSql, [donationId], (err3) => {
+                if (err3) {
+                    console.error('Failed to approve payment:', err3);
+                    return res.status(500).json({ success: false, message: 'Failed to approve payment' });
+                }
+
+                // log การอนุมัติ
+                logDonation(donationId, userId, "แอดมินยืนยันการชำระเงิน");
+
+                // ส่งแจ้งเตือนให้ผู้บริจาค
+                const insertNotificationSql = `
+                    INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
+                    VALUES (?, 'payment-donate', ?, ?, NOW(), 'ยังไม่อ่าน')
+                `;
+
+                const message = 'การบริจาคของคุณได้รับการยืนยันเรียบร้อยแล้ว';
+                
+                db.query(insertNotificationSql, [donation.user_id, message, donationId], (err4) => {
+                    if (err4) {
+                        console.error('Failed to insert notification:', err4);
+                        // ยังคงส่ง response สำเร็จเพราะการอนุมัติเสร็จแล้ว
+                        return res.json({ 
+                            success: true, 
+                            message: 'Payment approved and project amount updated successfully, but notification failed' 
+                        });
+                    }
+                    
+                    console.log('Notification sent successfully to user:', donation.user_id);
+                    res.json({ 
+                        success: true, 
+                        message: 'Payment approved, project amount updated, and notification sent successfully' 
+                    });
+                });
+            });
+        });
+    });
+});
+
+
+// ปฏิเสธการชำระเงิน
+router.put('/check-payment-donate/reject/:donationId', (req, res) => {
+    const { donationId } = req.params;
+    const { reject_reason, admin_id } = req.body;
+
+    // อัปเดตสถานะ donation และดึง user_id ในครั้งเดียว
+    const sql = `
+        UPDATE donations
+        SET payment_status = 'failed',
+            reject_reason = ?
+        WHERE donation_id = ?
+    `;
+
+    db.query(sql, [reject_reason, donationId], (err, result) => {
+        if (err) {
+            console.error('Failed to reject payment:', err);
+            return res.status(500).json({ success: false, message: 'Failed to reject payment' });
+        }
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ success: false, message: 'Donation not found' });
+        }
+
+        // ดึง user_id ของ donation ที่ถูกอัปเดต
+        const getUserSql = `SELECT user_id FROM donations WHERE donation_id = ?`;
+        db.query(getUserSql, [donationId], (err2, rows) => {
+            if (err2 || rows.length === 0) {
+                console.error('Failed to get user_id:', err2);
+                return res.json({ success: true, message: 'Payment rejected but user not found', updatedStatus: 'failed' });
+            }
+
+            const userId = rows[0].user_id;
+
+            // log การปฏิเสธ
+            logDonation(admin_id, donationId, "แอดมินปฏิเสธการชำระเงิน");
+
+            // insert notification
+            const message = 'การบริจาคโดนปฏิเสธ กรุณาอัปโหลดสลิปใหม่';
+            const insertNotificationSql = `
+                INSERT INTO notifications (user_id, type, message, related_id, send_date)
+                VALUES (?, 'reject-donate', ?, ?, NOW())
+                ON DUPLICATE KEY UPDATE 
+                    message = VALUES(message),
+                    send_date = NOW(),
+                    status = 'ยังไม่อ่าน';
+            `;
+
+            db.query(insertNotificationSql, [userId, message, donationId], (err3) => {
+                if (err3) {
+                    console.error('Failed to insert notification:', err3);
+                    // ไม่ return res.status ซ้ำ ให้ส่ง response สำเร็จแล้ว
+                    return res.json({ success: true, message: 'Payment rejected but notification failed', updatedStatus: 'failed' });
+                }
+
+                res.json({ success: true, message: 'Payment rejected successfully', updatedStatus: 'failed' });
+            });
+        });
+    });
+});
+
+
+// เปลี่ยนสถานะโครงการบริจาค
 router.put('/:id', (req, res) => {
     const projectId = req.params.id;
     if (!projectId) {
@@ -131,6 +640,7 @@ router.put('/:id', (req, res) => {
         res.status(200).json({ message: 'Project status updated successfully' });
     });
 });
+
 
 // เพิ่มสินค้าที่ระลึก
 router.post('/addsouvenir', upload.single('image'), (req, res) => {
@@ -284,7 +794,11 @@ router.put('/approveSouvenir/:productId', (req, res) => {
                 const notifyQuery = `
                     INSERT INTO notifications (user_id, type, message, related_id, send_date, status) 
                     VALUES (?, 'approve', ?, ?, NOW(), 'ยังไม่อ่าน')
-                `;
+                    ON DUPLICATE KEY UPDATE 
+                        message = VALUES(message),
+                        send_date = NOW(),
+                        status = 'ยังไม่อ่าน';
+                    `;
                 db.query(notifyQuery, [ownerId, message, productId], (err) => {
                     if (err) return res.status(500).json({ error: 'Error sending notification' });
 
@@ -355,6 +869,10 @@ router.delete('/deleteSouvenir/:id', (req, res) => {
         const insertNotification = `
             INSERT INTO notifications (user_id, type, message, related_id, send_date, status) 
             VALUES (?, 'delete', ?, ?, NOW(), 'ยังไม่อ่าน')
+            ON DUPLICATE KEY UPDATE 
+            message = VALUES(message),
+            send_date = NOW(),
+            status = 'ยังไม่อ่าน';
         `;
         const message = `สินค้าของคุณ "${productName}" ถูกลบ`;
         db.query(insertNotification, [userId, message, productId], (err) => {
@@ -636,22 +1154,6 @@ router.put('/:userId/role', (req, res) => {
     });
 });
 
-// ลบผู้ใช้
-// router.delete("/delete-user/:userId", (req, res) => {
-//     const { userId } = req.params;
-
-//     const query = "DELETE FROM users WHERE user_id = ?";
-//     db.query(query, [userId], (err, results) => {
-//         if (err) {
-//             console.error("Error deleting user:", err);
-//             return res.status(500).send("Error deleting user");
-//         }
-
-//         logManage(userId, 'ลบผู้ใช้');
-//         res.send("ลบผู้ใช้สำเร็จ");
-//     });
-// });
-
 // ลบผู้ใช้ (Soft Delete)
 router.delete("/delete-user/:userId", (req, res) => {
     const { userId } = req.params;
@@ -725,27 +1227,39 @@ router.get('/activity-per-year', (req, res) => {
     });
 });
 
-// สถิติการบริจาคแยกตามไตรมาส
-// router.get('/donation-stats', (req, res) => {
-//     const query = `
-//         SELECT 
-//             QUARTER(donation_date) AS quarter, 
-//             YEAR(donation_date) AS year, 
-//             SUM(amount) AS total_donations 
-//         FROM donations 
-//         WHERE deleted_at IS NULL
-//         GROUP BY QUARTER(donation_date), YEAR(donation_date)
-//     `;
-//     db.query(query, (err, results) => {
-//         if (err) {
-//             console.error('Database query failed:', err);
-//             return res.status(500).json({ error: 'Database query failed' });
-//         }
-//         res.json(results);
-//     });
-// });
+// สถิติการบริจาคแยกตามประเภทโครงการ
+router.get('/donation-stats', (req, res) => {
+    const query = `
+        SELECT p.donation_type, SUM(d.amount) AS total
+        FROM donations d
+        JOIN donationproject p ON d.project_id = p.project_id
+        WHERE d.payment_status = 'paid' AND p.status = "1"
+        GROUP BY p.donation_type
+    `;
 
-// GET /admin/dashboard-stats
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error("Error fetching donation stats:", err);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+
+        // mapping ประเภทการบริจาคเป็นภาษาไทย
+        const typeMap = {
+            unlimited: "บริจาคแบบไม่จำกัดจำนวน",
+            fundraising: "บริจาคแบบระดมทุน",
+            things: "บริจาคสิ่งของ"
+        };
+
+        // ส่งข้อมูลให้ง่ายต่อการใช้ใน Pie Chart
+        const formatted = results.map(row => ({
+            donation_type: typeMap[row.donation_type] || row.donation_type,
+            total: row.total || 0
+        }));
+
+        res.json(formatted);
+    });
+});
+
 router.get('/dashboard-stats', (req, res) => {
     let result = {
         totalParticipants: 0,
@@ -754,36 +1268,40 @@ router.get('/dashboard-stats', (req, res) => {
         totalDonations: 0,
     };
 
+    // 1. นับผู้เข้าร่วม
     db.query('SELECT COUNT(*) AS total FROM participants', (err, participants) => {
-        if (err) {
-            console.error('Error fetching participants:', err);
-            return res.status(500).json({ message: 'Internal server error' });
-        }
+        if (err) return res.status(500).json({ message: 'Internal server error' });
         result.totalParticipants = participants[0].total;
 
-        // status 1 = กำลังดำเนินการ
+        // 2. นับกิจกรรมที่กำลังดำเนินการ
         db.query("SELECT COUNT(*) AS total FROM activity WHERE status = 1", (err, activities) => {
-            if (err) {
-                console.error('Error fetching activities:', err);
-                return res.status(500).json({ message: 'Internal server error' });
-            }
+            if (err) return res.status(500).json({ message: 'Internal server error' });
             result.ongoingActivity = activities[0].total;
 
-            db.query("SELECT COUNT(*) AS total FROM donationproject WHERE status = 1", (err, projects) => {
-                if (err) {
-                    console.error('Error fetching donation projects:', err);
-                    return res.status(500).json({ message: 'Internal server error' });
-                }
-                result.ongoingProject = projects[0].total;
+            // 3. นับโครงการที่กำลังดำเนินการ
+            const projectQuery = `
+                SELECT COUNT(DISTINCT p.project_id) AS total
+                FROM donationproject p
+                LEFT JOIN donations d 
+                  ON p.project_id = d.project_id 
+                  AND d.payment_status = 'paid'
+                WHERE p.status = "1"
+            `;
+            db.query(projectQuery, (err, donationproject) => {
+                if (err) return res.status(500).json({ message: 'Internal server error' });
+                result.ongoingProject = donationproject[0].total;
 
-                db.query('SELECT SUM(amount) AS total FROM donations', (err, donations) => {
-                    if (err) {
-                        console.error('Error fetching donations:', err);
-                        return res.status(500).json({ message: 'Internal server error' });
-                    }
-                    result.totalDonations = donations[0].total || 0;
+                // 4. รวมยอดเงินบริจาค
+                const donationQuery = `
+                    SELECT SUM(d.amount) AS total
+                    FROM donations d
+                    JOIN donationproject p ON d.project_id = p.project_id
+                    WHERE  d.payment_status = 'paid'
+                `;
+                db.query(donationQuery, (err, donations) => {
+                    if (err) return res.status(500).json({ message: 'Internal server error' });
+                    result.totalDonations = donations[0].total;
 
-                    // ส่งผลลัพธ์สุดท้าย
                     res.json(result);
                 });
             });

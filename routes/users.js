@@ -33,7 +33,6 @@ const upload = multer({
 });
 
 
-
 router.get('/profile', LoggedIn, checkActiveUser, (req, res) => {
   if (!req.session.user || !req.session.user.id) {
     return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });

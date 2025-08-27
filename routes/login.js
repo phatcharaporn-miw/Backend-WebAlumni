@@ -1,8 +1,6 @@
 var express = require('express');
 var router = express.Router();
-var db = require('../db');
-const bcrypt = require('bcrypt');
-const passport = require('passport');
+
 
 
 // router.post('/login', (req, res) => {

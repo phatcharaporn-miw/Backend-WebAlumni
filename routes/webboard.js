@@ -340,6 +340,10 @@ router.post('/webboard/:id/comment', LoggedIn, checkActiveUser, (req, res) => {
       const queryNotification = `
                 INSERT INTO notifications (user_id, type, message, related_id, status, send_date)
                 VALUES (?, 'comment', ?, ?, 'ยังไม่อ่าน', NOW())
+                ON DUPLICATE KEY UPDATE 
+            message = VALUES(message),
+            send_date = NOW(),
+            status = 'ยังไม่อ่าน';
             `;
       const message = `ผู้ใช้ ${req.session.user.full_name} แสดงความคิดเห็นในโพสต์ของคุณ`;
 
@@ -528,13 +532,6 @@ router.post('/webboard/:postId/favorite', LoggedIn, checkActiveUser, (req, res) 
     const userRole = userResults[0].role;  // role ของผู้ใช้
     let likedBy;
 
-    // ถ้าผู้ใช้เป็นศิษย์ปัจจุบัน ใช้ username, ถ้าเป็นศิษย์เก่าใช้ full_name
-    // if (userRole === 4) {
-    //   likedBy = userResults[0].username;
-    // } else {
-    //   likedBy = userResults[0].full_name;
-    // }
-
     // ดึง user_id ของเจ้าของกระทู้
     const queryGetPostOwner = `SELECT user_id FROM webboard WHERE webboard_id = ?`;
 
@@ -585,6 +582,10 @@ router.post('/webboard/:postId/favorite', LoggedIn, checkActiveUser, (req, res) 
             const queryNotification = `
                             INSERT INTO notifications (user_id, type, message, related_id, status, send_date)
                             VALUES (?, 'like', ?, ?, 'ยังไม่อ่าน', NOW())
+                            ON DUPLICATE KEY UPDATE 
+                            message = VALUES(message),
+                            send_date = NOW(),
+                            status = 'ยังไม่อ่าน';
                         `;
             const message = `${likedBy} ถูกใจโพสต์ของคุณ`;
 

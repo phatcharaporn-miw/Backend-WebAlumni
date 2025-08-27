@@ -8,13 +8,13 @@ const { logPayment, logOrder } = require('../logUserAction');
 
 // ตั้งค่าการจัดเก็บไฟล์
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, path.join(__dirname, '../uploads/'));
-    },
-    filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, uniqueSuffix + '-' + file.originalname);
-    }
+  destination: (req, file, cb) => {
+    cb(null, path.join(__dirname, '../uploads/'));
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + '-' + file.originalname);
+  }
 });
 
 const upload = multer({ storage });
@@ -142,6 +142,10 @@ router.post('/orders-status/:orderId', (req, res) => {
       const notifyQuery = `
         INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
         VALUES (?, 'order', ?, ?, NOW(), 'ยังไม่อ่าน')
+        ON DUPLICATE KEY UPDATE 
+            message = VALUES(message),
+            send_date = NOW(),
+            status = 'ยังไม่อ่าน';
       `;
 
       db.query(notifyQuery, [buyerId, message, orderId], (err3) => {
@@ -228,6 +232,10 @@ router.put('/seller/orders-status/:orderId', (req, res) => {
           const notifyQuery = `
             INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
             VALUES (?, 'order', ?, ?, NOW(), 'ยังไม่อ่าน')
+            ON DUPLICATE KEY UPDATE 
+            message = VALUES(message),
+            send_date = NOW(),
+            status = 'ยังไม่อ่าน';
           `;
           db.query(notifyQuery, [buyerId, message, orderId]);
         }
@@ -279,44 +287,44 @@ router.get('/orders-user/:userId', async (req, res) => {
 });
 
 // ยืนยันการได้รับสินค้า
-router.put('/orders-confirm/:orderId', (req, res) => {
-  const orderId = req.params.orderId;
+// router.put('/orders-confirm/:orderId', (req, res) => {
+//   const orderId = req.params.orderId;
 
-  const updateQuery = `
-    UPDATE orders
-    SET order_status = 'delivered',
-        delivered_at = NOW()
-    WHERE order_id = ? AND order_status = 'shipping'
-  `;
+//   const updateQuery = `
+//     UPDATE orders
+//     SET order_status = 'delivered',
+//         delivered_at = NOW()
+//     WHERE order_id = ? AND order_status = 'shipping'
+//   `;
 
-  db.query(updateQuery, [orderId], (err, result) => {
-    if (err) return res.status(500).json({ error: "อัปเดตสถานะไม่สำเร็จ" });
-    if (result.affectedRows === 0) return res.status(400).json({ message: "ไม่สามารถยืนยันคำสั่งซื้อนี้ได้" });
+//   db.query(updateQuery, [orderId], (err, result) => {
+//     if (err) return res.status(500).json({ error: "อัปเดตสถานะไม่สำเร็จ" });
+//     if (result.affectedRows === 0) return res.status(400).json({ message: "ไม่สามารถยืนยันคำสั่งซื้อนี้ได้" });
 
-    // หา user_id ของผู้ขาย
-    const sellerQuery = `
-      SELECT p.user_id AS seller_id
-      FROM orders o
-      JOIN products p ON o.product_id = p.product_id
-      WHERE o.order_id = ?
-    `;
-    db.query(sellerQuery, [orderId], (err, sellerResult) => {
-      if (err) return console.error("ไม่สามารถหาผู้ขาย:", err);
-      if (sellerResult.length > 0) {
-        const sellerId = sellerResult[0].seller_id;
+//     // หา user_id ของผู้ขาย
+//     const sellerQuery = `
+//       SELECT p.user_id AS seller_id
+//       FROM orders o
+//       JOIN products p ON o.product_id = p.product_id
+//       WHERE o.order_id = ?
+//     `;
+//     db.query(sellerQuery, [orderId], (err, sellerResult) => {
+//       if (err) return console.error("ไม่สามารถหาผู้ขาย:", err);
+//       if (sellerResult.length > 0) {
+//         const sellerId = sellerResult[0].seller_id;
 
-        // แจ้งผู้ขาย
-        const notifySellerQuery = `
-          INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
-          VALUES (?, 'order', 'ผู้ซื้อได้ยืนยันการรับสินค้าแล้ว', ?, NOW(), 'ยังไม่อ่าน')
-        `;
-        db.query(notifySellerQuery, [sellerId, orderId]);
-      }
-    });
+//         // แจ้งผู้ขาย
+//         const notifySellerQuery = `
+//           INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
+//           VALUES (?, 'order', 'ผู้ซื้อได้ยืนยันการรับสินค้าแล้ว', ?, NOW(), 'ยังไม่อ่าน')
+//         `;
+//         db.query(notifySellerQuery, [sellerId, orderId]);
+//       }
+//     });
 
-    res.json({ success: true, message: "ยืนยันได้รับสินค้าแล้ว" });
-  });
-});
+//     res.json({ success: true, message: "ยืนยันได้รับสินค้าแล้ว" });
+//   });
+// });
 
 
 // อัตโนมัติยืนยันการได้รับสินค้า
@@ -342,6 +350,10 @@ const autoConfirmDelivered = () => {
   const notifyQuery = `
   INSERT INTO notifications (user_id, type, message, related_id, send_date)
   VALUES (?, 'order', 'คำสั่งซื้อของคุณได้รับการยืนยันแล้ว', ?, NOW())
+  ON DUPLICATE KEY UPDATE 
+            message = VALUES(message),
+            send_date = NOW(),
+            status = 'ยังไม่อ่าน';
 `;
   db.query(notifyQuery, [userId, orderId]);
 
@@ -470,7 +482,6 @@ router.post('/verify-payment', (req, res) => {
         //บันทึก log การตรวจสอบชำระเงิน
         logPayment(admin_id, payment_id, isApproved ? "แอดมินยืนยันการชำระเงิน" : "แอดมินปฏิเสธการชำระเงิน", isApproved);
 
-        // --- เพิ่มบันทึก logOrder ---
         logOrder(admin_id, order_id, isApproved ? "แอดมินยืนยันการชำระเงิน" : "แอดมินปฏิเสธการชำระเงิน", reject_reason || null);
 
         // ข้อความแจ้งเตือน
@@ -486,6 +497,10 @@ router.post('/verify-payment', (req, res) => {
         const insertBuyerNotification = `
           INSERT INTO notifications (user_id, type, message, related_id, send_date)
           VALUES (?, 'payment', ?, ?, NOW())
+          ON DUPLICATE KEY UPDATE 
+            message = VALUES(message),
+            send_date = NOW(),
+            status = 'ยังไม่อ่าน';
         `;
 
         db.query(insertBuyerNotification, [buyer_id, buyerMessage, order_id], (err4) => {
@@ -496,6 +511,10 @@ router.post('/verify-payment', (req, res) => {
             const insertSellerNotification = `
               INSERT INTO notifications (user_id, type, message, related_id, send_date)
               VALUES (?, 'tracking', ?, ?, NOW())
+              ON DUPLICATE KEY UPDATE 
+            message = VALUES(message),
+            send_date = NOW(),
+            status = 'ยังไม่อ่าน';
             `;
             db.query(insertSellerNotification, [seller_id, sellerMessage, order_id], (err5) => {
               if (err5) return res.status(500).json({ error: err5 });
@@ -515,38 +534,38 @@ router.post('/verify-payment', (req, res) => {
 // ซื้ออีกครั้ง
 // ดึงสินค้าทั้งหมดจาก order
 router.get('/order-buyAgain/:orderId', (req, res) => {
-    const orderId = req.params.orderId;
-    
-    const query = `
+  const orderId = req.params.orderId;
+
+  const query = `
         SELECT od.product_id, od.quantity, p.product_name, p.price, p.stock
         FROM order_detail od
         JOIN products p ON od.product_id = p.product_id
         WHERE od.order_id = ? AND p.deleted_at IS NULL
     `;
-    
-    db.query(query, [orderId], (err, results) => {
-        if (err) {
-            console.error('Error fetching order items:', err);
-            return res.status(500).json({ error: 'Error fetching order items' });
-        }
-        
-        // ตรวจสอบสต๊อกและกรองสินค้าที่ไม่มีในสต๊อก
-        const availableItems = results.filter(item => 
-            item.stock >= item.quantity
-        );
-        
-        const unavailableItems = results.filter(item => 
-            item.stock < item.quantity
-        );
-        
-        res.json({
-            availableItems,
-            unavailableItems,
-            message: unavailableItems.length > 0 
-                ? 'บางสินค้าไม่มีในสต๊อกเพียงพอ' 
-                : 'พร้อมเพิ่มสินค้าทั้งหมดในตะกร้า'
-        });
+
+  db.query(query, [orderId], (err, results) => {
+    if (err) {
+      console.error('Error fetching order items:', err);
+      return res.status(500).json({ error: 'Error fetching order items' });
+    }
+
+    // ตรวจสอบสต๊อกและกรองสินค้าที่ไม่มีในสต๊อก
+    const availableItems = results.filter(item =>
+      item.stock >= item.quantity
+    );
+
+    const unavailableItems = results.filter(item =>
+      item.stock < item.quantity
+    );
+
+    res.json({
+      availableItems,
+      unavailableItems,
+      message: unavailableItems.length > 0
+        ? 'บางสินค้าไม่มีในสต๊อกเพียงพอ'
+        : 'พร้อมเพิ่มสินค้าทั้งหมดในตะกร้า'
     });
+  });
 });
 
 // อัปโหลดสลิปใหม่
@@ -581,7 +600,7 @@ router.post('/:orderId/reupload-slip', upload.single('paymentSlip'), async (req,
     );
 
     // บันทึก log การอัปโหลดสลิป
-    logPayment(userId, orderId, 'reupload_slip', false); 
+    logPayment(userId, orderId, 'reupload_slip', false);
 
     // คอมมิตการเปลี่ยนแปลง
     await conn.query('COMMIT');
@@ -593,6 +612,59 @@ router.post('/:orderId/reupload-slip', upload.single('paymentSlip'), async (req,
     res.status(500).json({ error: 'เกิดข้อผิดพลาดในการอัปโหลด' });
   }
 });
+
+// อัปโหลดหลักฐานการได้รับสินค้า
+router.post('/:orderId/upload-proof', upload.single('proofImage'), (req, res) => {
+  const { orderId } = req.params;
+  if (!req.file) {
+    return res.status(400).json({ success: false, message: 'กรุณาอัปโหลดไฟล์หลักฐาน' });
+  }
+
+  const proofImage = req.file.filename;
+
+  const updateQuery = `
+    UPDATE orders 
+    SET proof_image = ?, order_status = 'delivered',
+        delivered_at = NOW()
+    WHERE order_id = ? AND order_status = 'shipping'
+  `;
+
+  db.query(updateQuery, [proofImage, orderId], (err) => {
+    if (err) {
+      console.error('Error updating proof image:', err);
+      return res.status(500).json({ success: false, message: 'เกิดข้อผิดพลาดในการบันทึกหลักฐาน' });
+    }
+
+    // หา user_id ของผู้ขาย
+    const sellerQuery = `
+      SELECT p.user_id AS seller_id
+      FROM orders o
+      JOIN products p ON o.product_id = p.product_id
+      WHERE o.order_id = ?
+    `;
+    db.query(sellerQuery, [orderId], (err, sellerResult) => {
+      if (err) return console.error("ไม่สามารถหาผู้ขาย:", err);
+      if (sellerResult.length > 0) {
+        const sellerId = sellerResult[0].seller_id;
+
+        // แจ้งผู้ขาย
+        const notifySellerQuery = `
+          INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
+          VALUES (?, 'order', 'ผู้ซื้อได้ยืนยันการรับสินค้าแล้ว', ?, NOW(), 'ยังไม่อ่าน')
+          ON DUPLICATE KEY UPDATE 
+            message = VALUES(message),
+            send_date = NOW(),
+            status = 'ยังไม่อ่าน';
+          `;
+        db.query(notifySellerQuery, [sellerId, orderId]);
+      }
+    });
+
+    return res.json({ success: true, message: 'อัปโหลดหลักฐานสำเร็จ และได้แจ้งผู้ขายแล้ว' });
+  });
+});
+
+
 
 
 module.exports = router;

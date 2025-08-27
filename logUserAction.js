@@ -25,9 +25,16 @@ function logActivity(userId, activityId, actionDetail) {
 }
 // donationlog
 function logDonation(userId, donationId, actionDonate) {
-  const queryDonationlog = `INSERT INTO donationlog (donation_id, user_id, action) VALUES (?, ?, ?)`;
-  db.query(queryDonationlog, [donationId, userId, actionDonate], (err) => {
-    if (err) console.error('เกิดข้อผิดพลาดในการบันทึก donationlog:', err);
+  const queryDonationlog = `
+        INSERT INTO donationlog (user_id, donation_id, action, timestamp) 
+        VALUES (?, ?, ?, NOW())
+  `;
+  db.query(queryDonationlog, [userId, donationId, actionDonate], (err) => {
+    if (err) {
+      console.error('เกิดข้อผิดพลาดในการบันทึก log:', err);
+    } else {
+      console.log(`บันทึก log สำเร็จ`);
+    }
   });
 }
 

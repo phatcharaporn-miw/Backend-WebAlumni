@@ -77,13 +77,13 @@ router.post('/register', upload.single('image_path'), async (req, res) => {
         }
 
         // สร้าง user
-        const queryUser = 'INSERT INTO users (role_id, is_first_login, created_at, updated_at) VALUES (?, ?, NOW(), NOW())';
-        const [userResult] = await db.promise().query(queryUser, [role, isFirstLogin]);
+        const queryUser = 'INSERT INTO users (role_id, created_at, updated_at) VALUES (?, NOW(), NOW())';
+        const [userResult] = await db.promise().query(queryUser, [role]);
         const user_id = userResult.insertId;
 
         // เพิ่ม login
-        const queryLogin = 'INSERT INTO login (user_id, username, password) VALUES (?, ?, ?)';
-        await db.promise().query(queryLogin, [user_id, username, hashedPassword]);
+        const queryLogin = 'INSERT INTO login (user_id, username, password, is_first_login) VALUES (?, ?, ?, ?)';
+        await db.promise().query(queryLogin, [user_id, username, hashedPassword, isFirstLogin]);
 
         // เพิ่ม profiles
         if ([1,2,4].includes(parseInt(role))) {
@@ -135,7 +135,7 @@ router.post('/register', upload.single('image_path'), async (req, res) => {
             const educations = JSON.parse(req.body.education || '[]');
             if (Array.isArray(educations) && educations.length > 0) {
                 const queryEducation = `
-                    INSERT INTO educations (user_id, degree_id, studentId, graduation_year, major_id)
+                    INSERT INTO educations (user_id, degree_id, studentId, graduation_year, entry_year, major_id)
                     VALUES ?
                 `;
                 const educationData = educations.map((edu) => [
@@ -143,6 +143,7 @@ router.post('/register', upload.single('image_path'), async (req, res) => {
                     edu.degree || null,
                     edu.studentId || null,
                     edu.graduation_year || null,
+                    edu.entry_year || null,
                     edu.major || null,
                 ]);
                 await db.promise().query(queryEducation, [educationData]);
