@@ -10,7 +10,6 @@ var generatePayload = require('promptpay-qr');
 var bodyParser = require('body-parser');
 const cors = require('cors');
 var passport = require('passport');
-
 const session = require('express-session');
 // const schedule = require('./routes/schedule');
 
@@ -26,32 +25,17 @@ app.set('view engine', 'ejs');
 // Middleware
 app.use(logger('dev'));
 app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({ extended: true }));
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.use(cors({
-    origin: 'http://localhost:3000', 
+    origin: 'http://localhost:3002', // เปลี่ยนเป็น URL ของ frontend
     credentials: true, 
 }));
 
 app.set('trust proxy', 1);
-
-const allowedOrigins = ["http://localhost:3002", "http://localhost:3001"];
-
-const corsOptions = {
-  origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true,
-};
-
-app.use(cors(corsOptions));
 
 
 app.use(express.json());
@@ -60,11 +44,11 @@ app.use('/img', express.static('img'));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 app.use(session({
-  secret: process.env.SESSION_SECRET,
+  secret: process.env.SESSION_SECRET || 'secret_key',
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: process.env.NODE_ENV === "production", // ใช้ HTTPS เท่านั้นใน production
+    secure: false, // ใช้ HTTPS เท่านั้นใน production
     httpOnly: true, // ป้องกันการเข้าถึง cookie จาก JS
     sameSite: 'lax', // หรือ 'strict' เพื่อป้องกัน CSRF
     maxAge: 1000 * 60 * 60, 
@@ -96,15 +80,16 @@ var AdminAllRoute= require('./routes/admin');
 var alumniRoute= require('./routes/alumni');
 var activityRoute = require('./routes/activity'); 
 var ordersRoute = require('./routes/orders');
-var chatRouter = require('./routes/chat');
+// var chatRouter = require('./routes/chat');
+// var LoginRouter = require('./routes/login');
 
 app.use('/api', indexRouter);
-app.use('/login', LoginRoute);
+// app.use('/login', LoginRouter);
 app.use('/users', usersRouter);
 app.use('/add', registerRouter);
 app.use('/donate', DonateRoute);
 
-app.use('/admin', AdminRoute);
+// app.use('/admin', AdminRoute);
 app.use('/souvenir',SouvenirRoute);
 app.use('/web', webboardRouter);
 app.use('/notice', notificationRoute);
@@ -114,7 +99,7 @@ app.use('/alumni', alumniRoute);
 app.use('/activity', activityRoute); 
 app.use('/news', NewsRoute);
 app.use('/orders', ordersRoute);
-app.use('/chat', chatRouter); 
+// app.use('/chat', chatRouter); 
 
 //for admin
 app.use('/admin', AdminAllRoute);

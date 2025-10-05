@@ -30,7 +30,7 @@ router.get('/search-all', (req, res) => {
         
         SELECT 'donationproject' AS type, project_id AS id, NULL AS user_id, project_name AS title, description AS content, created_at
         FROM donationproject
-        WHERE (project_name LIKE ? OR description LIKE ?) AND delete_at IS NULL
+        WHERE (project_name LIKE ? OR description LIKE ?) 
 
         UNION
         

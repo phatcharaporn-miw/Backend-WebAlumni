@@ -440,7 +440,7 @@ router.post('/webboard/:webboardId/comment/:commentId/reply', LoggedIn, checkAct
 // ลบการแสดงความคิดเห็น
 router.delete('/webboard/:webboardId/comment/:commentId', LoggedIn, checkActiveUser, (req, res) => {
   const { commentId } = req.params;
-  const userId = req.session.user.id;
+  const userId = req.session.user?.id;
 
   const queryDeleteComment = 'DELETE FROM comment WHERE comment_id = ?';
   db.query(queryDeleteComment, [commentId, userId], (err, result) => {
@@ -462,7 +462,7 @@ router.delete('/webboard/:webboardId/comment/:commentId', LoggedIn, checkActiveU
 // ลบการตอบกลับ
 router.delete('/webboard/:webboardId/comment/:commentId/reply/:replyId', LoggedIn, checkActiveUser, (req, res) => {
   const { commentId, replyId } = req.params;
-  const userId = req.session.user.id;
+  const userId = req.session.user?.id;
 
 
   // ดึง webboard_id จาก commentId

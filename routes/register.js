@@ -198,12 +198,16 @@ router.post('/register', upload.single('image_path'), async (req, res) => {
             message: 'ลงทะเบียนสำเร็จ',
             user_id: user_id
         });
+        
 
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ message: 'ไม่สามารถลงทะเบียนได้' });
+    }}} catch (error) {
+        console.error('Error during registration:', error);
+        return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการลงทะเบียน' });
     }
+
 });
+
+
 
 // Route สำหรับดึงข้อมูลสาขามาแสดง
 router.get('/major', async (req, res) => {

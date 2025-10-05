@@ -5,8 +5,8 @@ const bcrypt = require('bcrypt');
 const nodemailer = require('nodemailer');
 const { logUserAction } = require('../logUserAction');
 
-
 router.post('/login', (req, res) => {
+  console.log("Login request body:", req.body);
   const { username, password } = req.body;
 
   if (!username || !password) {
@@ -53,7 +53,15 @@ router.post('/login', (req, res) => {
       }
 
       // บันทึก session
-      req.session.user = { id: user.user_id, username: user.username, role: user.role_id };
+      req.session.user = {
+        id: user.user_id,
+        username: user.username,
+        role: user.role_id,
+        is_active: user.is_active,   // เพิ่ม
+        image_path: user.image_path  // เผื่อ frontend ใช้
+      };
+
+      console.log("Session after login:", req.session.user);
 
       // บังคับเปลี่ยนรหัสครั้งแรกเฉพาะ alumni (role=3) ที่ถูกสร้างโดย admin
       const firstLogin = parseInt(user.role_id) === 3 && user.is_first_login === 1;
@@ -72,9 +80,8 @@ router.post('/login', (req, res) => {
 });
 
 
-
 // Logout Route
-router.get('/logout', (req, res) => {
+router.post('/logout', (req, res) => {
   // ลบ session ทั้งหมดเพื่อออกจากระบบ
   req.session.destroy((err) => {
     if (err) {
@@ -239,53 +246,49 @@ router.post("/reset-password", (req, res) => {
 });
 
 
-// ตรวจสอบรหัสนักศึกษา
-router.post('/check-studentId', (req, res) => {
-  const { studentId } = req.body;
-  if (!studentId) return res.status(400).json({ message: 'กรุณาระบุรหัสนักศึกษา' });
-  // console.log('Received studentId:', studentId);
+// ตรวจสอบชื่อ-นามสกุล
+router.post('/check-fullName', (req, res) => {
+  const { full_name } = req.body;
+  if (!full_name) return res.status(400).json({ message: 'กรุณาระบุชื่อ-นามสกุล' });
 
-  let query = '';
-  let param = '';
+  // ทำความสะอาด input เพื่อป้องกัน SQL Injection (ใช้ parameterized query)
+  const cleanedFullName = full_name.trim();
 
-  if (/^\d{9}-\d$/.test(studentId)) {
-    // กรณีใส่รหัสเต็ม เช่น 653380253-3
-    query = `
-      SELECT e.studentId, e.graduation_year, 
-             p.full_name, d.degree_name, m.major_name
-      FROM educations e
-      JOIN profiles p ON e.user_id = p.user_id
-      JOIN degree d ON e.degree_id = d.degree_id
-      JOIN major m ON e.major_id = m.major_id
-      WHERE e.studentId = ?
-    `;
-    param = studentId;
-  } else if (/^\d{3}-\d$/.test(studentId)) {
-    // กรณีใส่ 4 ตัวท้าย เช่น 253-3
-    query = `
-      SELECT e.studentId, e.graduation_year, 
-             p.full_name, d.degree_name, m.major_name
-      FROM educations e
-      JOIN profiles p ON e.user_id = p.user_id
-      JOIN degree d ON e.degree_id = d.degree_id
-      JOIN major m ON e.major_id = m.major_id
-      WHERE e.studentId LIKE ?
-    `;
-    param = `%${studentId}`;
-  } else {
-    return res.status(400).json({ message: 'รูปแบบรหัสไม่ถูกต้อง' });
-  }
+  // ค้นหาโดยใช้ LIKE เพื่อรองรับการค้นหาแบบบางส่วน
+  const query = `
+    SELECT e.studentId, e.graduation_year, 
+           p.full_name, d.degree_name, m.major_name
+    FROM educations e
+    JOIN profiles p ON e.user_id = p.user_id
+    JOIN degree d ON e.degree_id = d.degree_id
+    JOIN major m ON e.major_id = m.major_id
+    WHERE p.full_name LIKE ?
+  `;
+  const param = `%${cleanedFullName}%`;
 
   db.query(query, [param], (err, results) => {
     if (err) {
-      console.error('เกิดข้อผิดพลาดในการตรวจสอบรหัสนักศึกษา:', err);
+      console.error('เกิดข้อผิดพลาดในการตรวจสอบชื่อ-นามสกุล:', err);
       return res.status(500).json({ success: false, message: 'Database error' });
     }
 
     if (results.length > 0) {
-      return res.status(200).json({ success: true, message: 'พบรหัสนักศึกษาในระบบ', data: results[0] });
+      // หากพบผลลัพธ์มากกว่า 1 รายการ
+      if (results.length > 1) {
+        return res.status(200).json({
+          success: true,
+          message: 'พบข้อมูลศิษย์เก่ามากกว่า 1 รายการ กรุณาระบุข้อมูลเพิ่มเติม',
+          data: results,
+        });
+      }
+      // หากพบผลลัพธ์ 1 รายการ
+      return res.status(200).json({
+        success: true,
+        message: 'พบข้อมูลศิษย์เก่าในระบบ',
+        data: results[0],
+      });
     } else {
-      return res.status(404).json({ success: false, message: 'ไม่พบรหัสนักศึกษาในระบบ' });
+      return res.status(404).json({ success: false, message: 'ไม่พบข้อมูลศิษย์เก่าในระบบ' });
     }
   });
 });

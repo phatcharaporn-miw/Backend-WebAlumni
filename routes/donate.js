@@ -92,7 +92,8 @@ route.get('/donatedetail/:id', (req, res) => {
 
 // สร้างโครงการบริจาคใหม่
 route.post('/donateRequest', upload.single('image'), (req, res) => {
-    const { userId } = req.body;
+    // const { userId } = req.body;
+    const userId = req.session.user?.id;
 
     if (!userId) {
         return res.status(400).json({ error: 'User ID is required' });
@@ -115,7 +116,6 @@ route.post('/donateRequest', upload.single('image'), (req, res) => {
 
     const values = [
         projectName,
-        userId,
         userId,
         description,
         startDate,
@@ -149,7 +149,7 @@ route.post('/donateRequest', upload.single('image'), (req, res) => {
         `;
 
         // user_id = 1 (แอดมิน)
-        const notifyValues = [1, 'donate-request', notifyMessage, projectId];
+        const notifyValues = [ 1, 'donate-request', notifyMessage, projectId];
 
         db.query(notifyQuery, notifyValues, (err2) => {
             if (err2) {
@@ -290,7 +290,7 @@ route.get("/donatePaid", authenticateUser, (req, res) => {
     const userId = req.user.id;
     const query = `
         SELECT d.donation_id, d.amount, d.created_at, d.payment_status,d.slip,
-               proj.project_name
+            proj.project_name
         FROM donations d
         LEFT JOIN donationproject proj ON d.project_id = proj.project_id
         WHERE d.user_id = ?
@@ -345,7 +345,7 @@ route.post("/upload-slip", authenticateUser, upload.single('slip'), (req, res) =
     });
 });
 
-//เปลี่ยนสถานะโครงการบริจาคอัตโนมัติถ้ามันสิ้นสุดเวลาแล้ว
+//เปลี่ยนสถานะโครงการบริจาคอัตโนมัติถ้ามันสิ้นสุดเวลาแล้ว status = 3
 cron.schedule('0 0 * * *', () => {
     console.log('CRON: Checking expired donation projects ');
 

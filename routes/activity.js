@@ -24,7 +24,7 @@ router.post('/post-activity', LoggedIn, checkActiveUser, upload.array('images', 
     return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
   }
 
-  const userId = req.session.user.id; // รับ ID จาก session
+  const userId = req.session.user?.id; // รับ ID จาก session
   // const imagePath = req.file ? `/uploads/${req.file.filename}` : '';   
   const {
     activity_name,
@@ -121,7 +121,7 @@ router.get('/all-activity', (req, res) => {
         activity_name,
         activity_date,
         description,
-       (
+      (
           SELECT activity_image.image_path 
           FROM activity_image 
           WHERE activity_image.activity_id = activity.activity_id 
@@ -140,10 +140,10 @@ router.get('/all-activity', (req, res) => {
         deleted_at,
         -- คำนวณสถานะจากวันที่
         CASE
-          WHEN COALESCE(end_date, activity_date) < CURDATE() THEN 1  -- เสร็จแล้ว
-          WHEN activity_date > CURDATE() THEN 0  -- กำลังจะจัดขึ้น
-          ELSE 2  -- กำลังดำเนินการ 
-        END AS status,
+        WHEN CURDATE() > COALESCE(end_date, activity_date) THEN 1  -- เสร็จแล้ว
+        WHEN CURDATE() < activity_date THEN 0  -- กำลังจะจัดขึ้น
+        ELSE 2  -- กำลังดำเนินการ
+      END AS status,
         (SELECT COUNT(*) FROM participants WHERE participants.activity_id = activity.activity_id) AS current_participants
       FROM activity
       WHERE deleted_at IS NULL 
@@ -224,7 +224,7 @@ router.put('/edit-activity/:activityId', LoggedIn, checkActiveUser, upload.array
     return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
   }
 
-  const userId = req.session.user.id;
+  const userId = req.session.user?.id;
   const {
     activity_name,
     activity_date,
@@ -304,7 +304,7 @@ router.put('/edit-activity/:activityId', LoggedIn, checkActiveUser, upload.array
 // ลบกิจกรรมแบบ Soft Delete
 router.delete('/delete-activity/:activityId', LoggedIn, checkActiveUser, (req, res) => {
   const { activityId } = req.params;
-  const userId = req.session.user.id;
+  const userId = req.session.user?.id;
 
   // if (!user || (user.role !== 1 && user.role !== 2)) {
   //     return res.status(403).json({ success: false, message: 'คุณไม่มีสิทธิ์ลบกิจกรรม' });
@@ -339,8 +339,8 @@ router.post('/activity-form', LoggedIn, checkActiveUser, (req, res) => {
     return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
   }
 
-  const userId = req.session.user.id;
-  const userRole = req.session.user.role;
+  const userId = req.session.user?.id;
+  const userRole = req.session.user?.role;
   const { activity_id, full_name, email, phone, batch_year, department, education_level, year_level } = req.body;
 
   // ตรวจสอบว่า userRole เป็นศิษย์เก่าหรือศิษย์ปัจจุบัน
@@ -500,7 +500,7 @@ router.get('/activity-history/:userId', LoggedIn, checkActiveUser, (req, res) =>
     return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
   }
 
-  const userId = req.session.user.id;
+  const userId = req.session.user?.id;
 
   const queryUserActivity = `
     SELECT 
@@ -544,7 +544,7 @@ router.get('/activity-history/:userId', LoggedIn, checkActiveUser, (req, res) =>
 
 // ตรวจสอบว่าผู้ใช้เข้าร่วมกิจกรรมนี้แล้วหรือยัง
 router.get('/check-join/:activityId', (req, res) => {
-  const userId = req.session.user.id;
+  const userId = req.session.user?.id;
   const { activityId } = req.params;
 
   if (!userId || !activityId) {

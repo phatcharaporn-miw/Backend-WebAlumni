@@ -25,7 +25,7 @@ router.post('/create-news', upload.array('images'), (req, res) => {
     return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
   }
 
-  const userId = req.session.user.id; 
+  const userId = req.session.user?.id; 
   const { title, content } = req.body; 
   const imagePaths = req.files.map(file => `/uploads/${file.filename}`); 
 
@@ -165,7 +165,7 @@ router.get('/news-id/:newsId', (req, res) => {
 // แก้ไขข่าวประชาสัมพันธ์
 router.put('/edit-news/:newsId', LoggedIn, checkActiveUser, upload.array('images'), (req, res) => {
     const { newsId } = req.params;
-    const userId = req.session.user.id;
+    const userId = req.session.user?.id;
 
     if (!req.session.user || !req.session.user.id) {
         return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
@@ -239,7 +239,7 @@ router.delete('/delete-news/:newsId', LoggedIn, checkActiveUser, (req, res) => {
       return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
   }
 
-  const userId = req.session.user.id;
+  const userId = req.session.user?.id;
 
   const querySoftDeleteNews = `
       UPDATE news
