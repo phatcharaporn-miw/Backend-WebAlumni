@@ -32,6 +32,61 @@ router.get('/notification/:userId', (req, res) => {
     });
 });
 
+router.post('/add-notification', (req, res) => {
+  const { user_id, type, message, related_id } = req.body;
+  const send_date = new Date();
+
+  // ตรวจสอบว่ามีแจ้งเตือนเดิมที่ type + message + related_id เดียวกันไหม
+  const checkQuery = `
+    SELECT notification_id 
+    FROM notifications 
+    WHERE user_id = ? 
+      AND type = ? 
+      AND message = ? 
+      AND (related_id = ? OR ? IS NULL) 
+      AND deleted_at IS NULL
+    ORDER BY send_date DESC 
+    LIMIT 1
+  `;
+
+  db.query(checkQuery, [user_id, type, message, related_id, related_id], (err, result) => {
+    if (err) {
+      console.error("❌ Database error:", err);
+      return res.status(500).json({ success: false, message: 'Database error' });
+    }
+
+    if (result.length > 0) {
+      // ถ้ามีอยู่แล้ว → อัปเดตแทน
+      const updateQuery = `
+        UPDATE notifications 
+        SET send_date = ?, status = 'ยังไม่อ่าน' 
+        WHERE notification_id = ?
+      `;
+      db.query(updateQuery, [send_date, result[0].notification_id], (err2) => {
+        if (err2) {
+          console.error("❌ Update failed:", err2);
+          return res.status(500).json({ success: false, message: 'Update failed' });
+        }
+        res.json({ success: true, message: '✅ Updated existing notification' });
+      });
+
+    } else {
+      // ถ้ายังไม่มี → แทรกใหม่
+      const insertQuery = `
+        INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
+        VALUES (?, ?, ?, ?, ?, 'ยังไม่อ่าน')
+      `;
+      db.query(insertQuery, [user_id, type, message, related_id, send_date], (err3) => {
+        if (err3) {
+          console.error("❌ Insert failed:", err3);
+          return res.status(500).json({ success: false, message: 'Insert failed' });
+        }
+        res.json({ success: true, message: '✅ Notification created' });
+      });
+    }
+  });
+});
+
 
 // อัปเดตสถานะแจ้งเตือนเป็น "อ่านแล้ว"
 router.put('/read/:notificationId', (req, res) => {

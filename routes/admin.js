@@ -866,27 +866,82 @@ router.get('/product-slots/:productId', (req, res) => {
 
 
 // เพิ่ม slot ให้สินค้า (หลังจาก approve แล้ว)
+// router.post('/products/add-slot/:productId', (req, res) => {
+//     const { productId } = req.params;
+//     const { slot_name, quantity, start_date, end_date } = req.body;
+
+//     if (!slot_name || !quantity) {
+//         return res.status(400).json({ error: 'Slot name and quantity are required' });
+//     }
+
+//     // ให้ slot ใหม่เป็น pending ก่อน
+//     const query = `
+//         INSERT INTO product_slots (product_id, slot_name, quantity, status, start_date, end_date, created_at) 
+//         VALUES (?, ?, ?, 'pending', ?, ?, NOW())
+//     `;
+
+//     const startDate = start_date ? new Date(start_date) : new Date();
+//     const endDate = end_date ? new Date(end_date) : null;
+
+//     db.query(query, [productId, slot_name, quantity, startDate, endDate], (err) => {
+//         if (err) return res.status(500).json({ error: 'Database error inserting slot' });
+//         return res.status(201).json({ message: 'Slot created successfully' });
+//     });
+// });
+
+// เพิ่ม slot ให้สินค้า (ขายได้เรื่อยๆจนกว่าของจะหมด)
 router.post('/products/add-slot/:productId', (req, res) => {
     const { productId } = req.params;
-    const { slot_name, quantity, start_date, end_date } = req.body;
+    const { slot_name, quantity } = req.body;
 
     if (!slot_name || !quantity) {
-        return res.status(400).json({ error: 'Slot name and quantity are required' });
+        return res.status(400).json({ error: 'Slot name และ quantity จำเป็นต้องระบุ' });
     }
 
-    // ให้ slot ใหม่เป็น pending ก่อน
+    // ขายได้เรื่อยๆ → start_date = ปัจจุบัน, end_date = NULL
+    const startDate = new Date();
+    const endDate = null;
+
+    // สถานะเป็น available
     const query = `
         INSERT INTO product_slots (product_id, slot_name, quantity, status, start_date, end_date, created_at) 
-        VALUES (?, ?, ?, 'pending', ?, ?, NOW())
+        VALUES (?, ?, ?, 'available', ?, ?, NOW())
     `;
-
-    const startDate = start_date ? new Date(start_date) : new Date();
-    const endDate = end_date ? new Date(end_date) : null;
 
     db.query(query, [productId, slot_name, quantity, startDate, endDate], (err) => {
         if (err) return res.status(500).json({ error: 'Database error inserting slot' });
-        return res.status(201).json({ message: 'Slot created successfully' });
+        return res.status(201).json({ message: 'Slot ถูกสร้างเรียบร้อยและขายได้เรื่อยๆจนกว่าสินค้าจะหมด' });
     });
+});
+
+// ตัวอย่างการสั่งซื้อสินค้าเพื่อตรวจสอบ quantity
+router.post('/products/order/:productId', (req, res) => {
+    const { productId } = req.params;
+    const { order_qty } = req.body;
+
+    db.query(
+        "SELECT slot_id, quantity FROM product_slots WHERE product_id = ? AND status = 'available' LIMIT 1",
+        [productId],
+        (err, results) => {
+            if (err) return res.status(500).json({ error: 'DB error' });
+
+            const slot = results[0];
+            if (!slot) return res.status(400).json({ error: 'สินค้าหมด' });
+            if (slot.quantity < order_qty) return res.status(400).json({ error: 'จำนวนสินค้าที่สั่งเกินไป' });
+
+            const newQty = slot.quantity - order_qty;
+            const slotStatus = newQty === 0 ? 'sold_out' : 'available';
+
+            db.query(
+                "UPDATE product_slots SET quantity = ?, status = ? WHERE slot_id = ?",
+                [newQty, slotStatus, slot.slot_id],
+                (err) => {
+                    if (err) return res.status(500).json({ error: 'DB update error' });
+                    res.json({ message: 'สั่งซื้อสำเร็จ', remaining: newQty });
+                }
+            );
+        }
+    );
 });
 
 // แก้ไข slot สินค้า
@@ -946,6 +1001,35 @@ router.delete('/products/delete-slot/:slotId', (req, res) => {
         });
     });
 });
+
+// คืนสินค้า / ยกเลิกคำสั่งซื้อ
+// router.post('/products/return/:orderId', (req, res) => {
+//     const { orderId } = req.params;
+
+//     // ดึง slot ของ order
+//     db.query(
+//         `SELECT slot_id, quantity FROM orders
+//          JOIN product_slots ON orders.slot_id = product_slots.slot_id
+//          WHERE order_id = ?`,
+//         [orderId],
+//         (err, results) => {
+//             if (err) return res.status(500).json({ error: 'DB error' });
+//             if (!results.length) return res.status(400).json({ error: 'Order ไม่พบ' });
+
+//             const slot = results[0];
+//             const updatedQty = slot.quantity + 1; // คืน 1 หน่วย (ปรับตามจริง)
+            
+//             db.query(
+//                 "UPDATE product_slots SET quantity = ?, status = 'available' WHERE slot_id = ?",
+//                 [updatedQty, slot.slot_id],
+//                 (err) => {
+//                     if (err) return res.status(500).json({ error: 'DB update error' });
+//                     res.json({ message: 'คืนสินค้าเรียบร้อย', updatedQty });
+//                 }
+//             );
+//         }
+//     );
+// });
 
 // -------------------ส่วนของการจัดการผู้ใช้และแดชบอร์ด----------------------------------------
 // ดึงข้อมูลสรุปกิจกรรม
@@ -1113,7 +1197,7 @@ router.get('/users/:userId', (req, res) => {
 
 // แก้ไขโปรไฟล์ผู้ใช้
 router.put('/edit-profile-users/:userId', (req, res) => {
-    console.log("Request body:", req.body);
+    // console.log("Request body:", req.body);
     const userId = req.params.userId;
     const { email, phone, address, educations } = req.body;
 
@@ -1463,29 +1547,36 @@ router.get("/majors", (req, res) => {
 router.get("/order-issue", (req, res) => {
     const sql = `
         SELECT 
-        i.issue_id, 
-        i.order_id, 
-        i.issue_type, 
-        i.description, 
-        i.evidence_path, 
-        i.contacted, 
-        i.created_at,
-        i.resolution_options,
-        o.order_status, 
-        o.total_amount, 
-        o.shippingAddress,
-        u.full_name AS buyer_name,
-        GROUP_CONCAT(p.product_name SEPARATOR ', ') AS product_names
-    FROM order_issues i
-    JOIN orders o ON i.order_id = o.order_id
-    JOIN profiles u ON i.user_id = u.user_id
-    JOIN order_detail oi ON oi.order_id = o.order_id
-    JOIN products p ON p.product_id = oi.product_id
-    WHERE o.order_status IN ('issue_reported')
-    GROUP BY i.issue_id, i.order_id, i.issue_type, i.description, i.evidence_path, i.contacted, i.created_at,
-            o.order_status, o.total_amount, o.shippingAddress, u.full_name
-    ORDER BY i.created_at DESC;
-
+            i.issue_id, 
+            i.order_id, 
+            i.issue_type, 
+            i.description, 
+            i.evidence_path, 
+            i.contacted, 
+            i.created_at,
+            i.resolution_options,
+            o.order_status, 
+            o.total_amount,
+            u.full_name AS buyer_name,
+            ua.shippingAddress,
+            ua.province_name,
+            ua.district_name,
+            ua.sub_district_name,
+            ua.zip_code,
+            ua.phone,
+            GROUP_CONCAT(p.product_name SEPARATOR ', ') AS product_names
+        FROM order_issues i
+        JOIN orders o ON i.order_id = o.order_id
+        JOIN profiles u ON i.user_id = u.user_id
+        JOIN user_addresses ua ON ua.user_id = u.user_id AND ua.is_default = 1
+        JOIN order_detail oi ON oi.order_id = o.order_id
+        JOIN products p ON p.product_id = oi.product_id
+        WHERE o.order_status IN ('issue_reported', 'return_pending', 'return_approved')
+        GROUP BY i.issue_id, i.order_id, i.issue_type, i.description, i.evidence_path, i.contacted, 
+                 i.created_at, i.resolution_options, o.order_status, o.total_amount, 
+                 u.full_name, ua.shippingAddress, ua.province_name, ua.district_name, 
+                 ua.sub_district_name, ua.zip_code, ua.phone
+        ORDER BY i.created_at DESC;
     `;
     db.query(sql, (err, results) => {
         if (err) {
@@ -1503,34 +1594,41 @@ router.get("/order-issue", (req, res) => {
     });
 });
 
-// แอดมินอัปเดตสถานะปัญหาการจัดส่ง
+// แอดมินอัปเดตสถานะปัญหาการจัดส่ง / คืนเงิน
 router.put("/update-issue-status/:issueId", (req, res) => {
     const { issueId } = req.params;
-    const { resolution_type, resolution_note, admin_status } = req.body;
+    let { resolution_type, resolution_note, admin_status } = req.body;
 
     // ตรวจสอบค่าที่ถูกต้อง
     if (!["approved", "rejected", "resolved"].includes(admin_status)) {
         return res.status(400).json({ error: "สถานะไม่ถูกต้อง" });
     }
 
-    // ดึง order_id และ user_id ของ issue
-    const selectQuery = `SELECT order_id, user_id, issue_type FROM order_issues WHERE issue_id = ?`;
+    // ถ้า resolution_note เป็น object (กรณีคืนเงิน) → แปลงเป็น JSON string
+    let refundDate = null;
+    if (typeof resolution_note === "object" && resolution_note !== null) {
+        refundDate = resolution_note.refundDate || null;
+        resolution_note = JSON.stringify(resolution_note);
+    }
+
+    const selectQuery = `SELECT order_id, user_id FROM order_issues WHERE issue_id = ?`;
     db.query(selectQuery, [issueId], (err, rows) => {
         if (err || !rows.length) {
             return res.status(404).json({ error: "ไม่พบปัญหานี้" });
         }
+
         const { order_id, user_id } = rows[0];
 
-        // อัปเดต admin_status และ resolution_note ใน order_issues
+        // อัปเดต order_issues
         const updateIssueQuery = `
             UPDATE order_issues 
-            SET admin_status = ?, resolution_type = ?, resolution_note = ?, updated_at = NOW() 
+            SET admin_status = ?, resolution_type = ?, resolution_note = ?, refund_date = ?, updated_at = NOW()
             WHERE issue_id = ?
         `;
-        db.query(updateIssueQuery, [admin_status, resolution_type, resolution_note, issueId], (err) => {
+        db.query(updateIssueQuery, [admin_status, resolution_type, resolution_note, refundDate, issueId], (err) => {
             if (err) return res.status(500).json({ error: "อัปเดตสถานะปัญหาไม่สำเร็จ" });
 
-            // กำหนด order status ตาม resolution_type
+            // กำหนด order_status
             let newOrderStatus;
             if (resolution_type === "resend") {
                 newOrderStatus = "resend_processing";
@@ -1540,32 +1638,25 @@ router.put("/update-issue-status/:issueId", (req, res) => {
                 newOrderStatus = "issue_rejected";
             }
 
-            // สร้าง query และ params
-            let updateOrderQuery;
-            let params;
+            const updateOrderQuery = resolution_type === "resend"
+                ? `UPDATE orders SET order_status = ?, tracking_number = ? WHERE order_id = ?`
+                : `UPDATE orders SET order_status = ? WHERE order_id = ?`;
 
-            if (resolution_type === "resend") {
-                // อัปเดต order_status + tracking_number
-                updateOrderQuery = `UPDATE orders SET order_status = ?, tracking_number = ? WHERE order_id = ?`;
-                params = [newOrderStatus, resolution_note, order_id];
-            } else {
-                // อัปเดต order_status อย่างเดียว
-                updateOrderQuery = `UPDATE orders SET order_status = ? WHERE order_id = ?`;
-                params = [newOrderStatus, order_id];
-            }
+            const params = resolution_type === "resend"
+                ? [newOrderStatus, resolution_note, order_id]
+                : [newOrderStatus, order_id];
 
-            // รัน query อัปเดต order
             db.query(updateOrderQuery, params, (err) => {
                 if (err) return res.status(500).json({ error: "อัปเดตคำสั่งซื้อไม่สำเร็จ" });
 
-                // สร้าง notification
+                // สร้างข้อความแจ้งเตือน
                 let message;
                 if (resolution_type === "refund") {
-                    message = `คำสั่งซื้อ #${order_id} ของคุณได้รับการอนุมัติคืนเงิน โปรดติดต่อแอดมินเพื่อรับเงินคืน`;
+                    message = `คำสั่งซื้อของคุณได้รับการคืนเงินแล้ว (วันที่ ${refundDate || "ไม่ระบุ"})`;
                 } else if (resolution_type === "resend") {
                     message = `คำสั่งซื้อ #${order_id} ของคุณจะถูกส่งสินค้าใหม่ Tracking: ${resolution_note}`;
                 } else {
-                    message = `คำสั่งซื้อ #${order_id} ของคุณไม่ได้รับการอนุมัติการแก้ไข`;
+                    message = `คำสั่งซื้อ #${order_id} ไม่ได้รับการอนุมัติการแก้ไข`;
                 }
 
                 const notifyQuery = `
@@ -1575,13 +1666,13 @@ router.put("/update-issue-status/:issueId", (req, res) => {
                 db.query(notifyQuery, [user_id, message, order_id], (err) => {
                     if (err) console.error("DB Notification Error:", err);
 
-                    // ส่ง response กลับ frontend
                     res.json({
                         success: true,
                         message: "อัปเดตสถานะเรียบร้อยแล้ว",
                         issue_status: admin_status,
                         resolution_type,
                         resolution_note,
+                        refund_date: refundDate,
                         order_status: newOrderStatus
                     });
                 });
@@ -1590,22 +1681,26 @@ router.put("/update-issue-status/:issueId", (req, res) => {
     });
 });
 
+
 // --------------------------------ผู้ใช้ส่งสินค้าคืน----------------------------
 // ดึงสินค้าที่ผู้ใช้ส่งคืน
 router.get("/returned-orders", (req, res) => {
     const sql = `
-    SELECT o.order_id, o.order_status, o.user_id, o.total_amount,
-           o.shippingAddress,
-           p.product_id, p.product_name, od.quantity, od.total,
-           r.return_id, r.status AS return_status, r.evidence_path
-    FROM orders o
-    JOIN order_detail od ON o.order_id = od.order_id
-    LEFT JOIN products p ON p.product_id = od.product_id
-    LEFT JOIN order_issues i ON o.order_id = i.order_id 
-    LEFT JOIN order_returns r ON i.issue_id = r.issue_id
-    WHERE o.order_status IN ('return_pending', 'return_approved')
-    ORDER BY o.create_at DESC
-  `;
+        SELECT 
+            o.order_id, o.order_status, o.user_id, o.total_amount,
+            ua.shippingAddress, ua.province_name, ua.district_name,
+            ua.sub_district_name, ua.zip_code, ua.phone,
+            p.product_id, p.product_name, od.quantity, od.total,
+            r.return_id, r.status AS return_status, r.evidence_path
+        FROM orders o
+        JOIN order_detail od ON o.order_id = od.order_id
+        LEFT JOIN products p ON p.product_id = od.product_id
+        LEFT JOIN order_issues i ON o.order_id = i.order_id 
+        LEFT JOIN order_returns r ON i.issue_id = r.issue_id
+        LEFT JOIN user_addresses ua ON ua.user_id = o.user_id AND ua.is_default = 1
+        WHERE o.order_status IN ('return_pending', 'return_approved')
+        ORDER BY o.create_at DESC
+    `;
 
     db.query(sql, (err, results) => {
         if (err) return res.status(500).json({ success: false, error: err.message });
@@ -1617,10 +1712,17 @@ router.get("/returned-orders", (req, res) => {
                 ordersMap[row.order_id] = {
                     order_id: row.order_id,
                     order_status: row.order_status,
-                    shippingAddress: row.shippingAddress,
                     user_id: row.user_id,
                     total_amount: row.total_amount,
-                    returns: row.return_id ? { return_id: row.return_id, status: row.return_status, evidence_path: row.evidence_path } : null,
+                    shippingAddress: row.shippingAddress,
+                    province_name: row.province_name,
+                    district_name: row.district_name,
+                    sub_district_name: row.sub_district_name,
+                    zip_code: row.zip_code,
+                    phone: row.phone,
+                    returns: row.return_id
+                    ? { return_id: row.return_id, status: row.return_status, evidence_path: row.evidence_path } 
+                    : null,
                     products: []
                 };
             }
@@ -1654,7 +1756,7 @@ router.put("/approve-return/:returnId", (req, res) => {
                 return res.status(404).json({ success: false, error: "ไม่พบข้อมูลการคืนสินค้า" });
             }
 
-            // 2) หาคำสั่งซื้อ + อัปเดตสถานะ order
+            // 2) ดึงข้อมูลคำสั่งซื้อที่เกี่ยวข้อง
             db.query(
                 `SELECT o.order_id, o.user_id 
                  FROM order_returns r
@@ -1671,26 +1773,42 @@ router.put("/approve-return/:returnId", (req, res) => {
                     const { order_id, user_id } = rows[0];
 
                     // 3) อัปเดตสถานะ order -> return_approved
-                    db.query(
+                        db.query(
                         `UPDATE orders SET order_status = 'return_approved', update_at = NOW() WHERE order_id = ?`,
                         [order_id],
                         (err) => {
                             if (err) return res.status(500).json({ success: false, error: err.message });
 
-                            // 4) ส่ง notification ไปยังผู้ซื้อ
-                            const message = `สินค้าของคุณจะถูกส่งใหม่ภายใน ${expected_delivery_days} วัน`;
+                            // คืนสินค้าเข้าคลัง
                             db.query(
-                                `INSERT INTO notifications (user_id, type, message, related_id, send_date, status) 
-                                 VALUES (?, 'return_update', ?, ?, NOW(), 'unread')`,
-                                [user_id, message, returnId],
-                                (err) => {
-                                    if (err) return res.status(500).json({ success: false, error: err.message });
+                            `SELECT od.product_id, od.quantity FROM order_detail od WHERE od.order_id = ?`,
+                            [order_id],
+                            (err, products) => {
+                                if(err) console.error("DB error fetching order products:", err);
 
-                                    return res.json({ 
-                                        success: true, 
-                                        message: "อนุมัติการคืนสินค้า และแจ้งผู้ซื้อเรียบร้อยแล้ว" 
-                                    });
-                                }
+                                products.forEach(p => {
+                                db.query(
+                                    `UPDATE product_slots SET sold = sold - ? WHERE product_id = ? AND sold >= ?`,
+                                    [p.quantity, p.product_id, p.quantity],
+                                    (err) => { if(err) console.error(err); }
+                                );
+                                });
+                            }
+                            );
+                            // 4) ส่ง notification ไปยังผู้ซื้อ
+                            const message = "สินค้าได้ส่งคืนสำเร็จ การคืนเงินจะดำเนินการเร็วๆ นี้";
+                            db.query(
+                            `INSERT INTO notifications (user_id, type, message, related_id, send_date, status) 
+                            VALUES (?, 'return_update', ?, ?, NOW(), 'unread')`,
+                            [user_id, message, returnId],
+                            (err) => {
+                                if (err) return res.status(500).json({ success: false, error: err.message });
+
+                                return res.json({ 
+                                success: true, 
+                                message: "อนุมัติการคืนสินค้าและแจ้งผู้ซื้อเรียบร้อยแล้ว" 
+                                });
+                            }
                             );
                         }
                     );
@@ -1699,6 +1817,7 @@ router.put("/approve-return/:returnId", (req, res) => {
         }
     );
 });
+
 
 // ---------------------แอดมินส่งสินค้าใหม่--------------
 //ส่งสินค้าใหม่
@@ -1734,7 +1853,7 @@ router.put("/resend/:orderId", (req, res) => {
   });
 });
 
-
+// ยืนยันการคืนเงิน
 router.put("/approve-refund/:issueId", (req, res) => {
   const { issueId } = req.params;
   const { refundDays } = req.body;
@@ -1748,6 +1867,64 @@ router.put("/approve-refund/:issueId", (req, res) => {
     }
   );
 });
+
+//--------------------จัดการการยกเลิกสินค้า-------------
+// อนุมัติ/ปฏิเสธ
+router.put("/cancel-manage/:orderId", (req, res) => {
+  const { orderId } = req.params;
+  const { action, userId } = req.body; // action = "approve" หรือ "reject"
+
+  let newStatus, messageToUser;
+  if(action === "approve") {
+    newStatus = "repeal_approved";
+
+    // คืนสินค้า
+    db.query("SELECT product_id, quantity FROM order_detail WHERE order_id = ?", [orderId], (err, products) => {
+        if(err) return console.error(err);
+        products.forEach(p => {
+            db.query(
+                "UPDATE product_slots SET sold = sold - ? WHERE product_id = ? AND sold >= ?",
+                [p.quantity, p.product_id, p.quantity],
+                (err) => { if(err) console.error(err); }
+            );
+        });
+    });
+}
+else if (action === "reject") {
+    newStatus = "repeal_rejected";
+    messageToUser = `คำขอยกเลิกคำสั่งซื้อ #${orderId} ของคุณถูกปฏิเสธ`;
+  } else {
+    return res.status(400).json({ message: "action ไม่ถูกต้อง" });
+  }
+
+  // อัปเดตสถานะ order
+  const updateOrderQuery = `
+    UPDATE orders 
+    SET order_status = ?, update_at = NOW()
+    WHERE order_id = ?
+  `;
+
+  db.query(updateOrderQuery, [newStatus, orderId], (err) => {
+    if (err) return res.status(500).json({ message: "อัปเดตสถานะไม่สำเร็จ" });
+
+    // แจ้งเตือนผู้ใช้
+    const insertNotifyQuery = `
+      INSERT INTO notifications (user_id, message, type, created_at, is_read)
+      VALUES (?, ?, 'order_cancel_status', NOW(), 0)
+    `;
+
+    db.query(insertNotifyQuery, [userId, messageToUser], (err2) => {
+      if (err2) console.error("แจ้งเตือนไม่สำเร็จ:", err2);
+    });
+
+    return res.json({
+      success: true,
+      message: `คำขอยกเลิกถูก${action === "approve" ? "อนุมัติ" : "ปฏิเสธ"}แล้ว`,
+      newStatus,
+    });
+  });
+});
+
 
 
 

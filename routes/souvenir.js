@@ -23,6 +23,196 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
+// ดึงที่อยู่ของผู้ใช้
+route.get("/user/shippingAddress", async (req, res) => {
+    const { user_id } = req.query;
+    if (!user_id) return res.status(400).json({ error: "user_id required" });
+
+    try {
+        // ดึงข้อมูลจากตาราง user_addresses
+        const [rows] = await db.promise().query(
+            `SELECT ua.*, p.full_name
+            FROM user_addresses AS ua
+            JOIN profiles AS p ON ua.user_id = p.user_id
+            WHERE ua.user_id = ? and ua.deleted_at IS NULL
+            ORDER BY ua.updated_at DESC`,
+            [user_id]
+        );
+
+        // map rows เป็น array ของ object
+        const addresses = rows.map(r => ({
+            user_addresses_id: r.user_addresses_id,
+            full_name: r.full_name,
+            shippingAddress: r.shippingAddress,
+            province_name: r.province_name,
+            district_name: r.district_name,
+            sub_district_name: r.sub_district_name,
+            province_id: r.province_id,
+            district_id: r.district_id,
+            sub_district_id: r.sub_district_id,
+            zip_code: r.zip_code,
+            phone: r.phone,
+            is_default: r.is_default
+        }));
+
+        res.json(addresses);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Internal server error" });
+    }
+});
+
+// เพิ่มที่อยู่
+route.post("/user/shippingAddress", async (req, res) => {
+    try {
+        const {
+            user_id,
+            shippingAddress,
+            province_id,
+            district_id,
+            sub_district_id,
+            province_name,
+            district_name,
+            sub_district_name,
+            zip_code,
+            is_default,
+            phone
+        } = req.body;
+
+        if (!user_id || !shippingAddress) {
+            return res.status(400).json({ error: "ข้อมูลไม่ครบถ้วน" });
+        }
+
+        // ถ้า is_default = 1 → เคลียร์ default address เดิม
+        if (is_default === 1) {
+            await db.promise().query(
+                "UPDATE user_addresses SET is_default = 0 WHERE user_id = ?",
+                [user_id]
+            );
+        }
+
+        // เพิ่มที่อยู่ใหม่
+        const [result] = await db.promise().query(
+            `INSERT INTO user_addresses 
+            (user_id, shippingAddress, province_id ,province_name,district_id, district_name, sub_district_id ,sub_district_name, zip_code,phone, is_default, created_at, updated_at)
+            VALUES (?, ?, ?,?,?,?, ?, ?, ?, ?,?, NOW(), NOW())`,
+            [user_id, shippingAddress, province_id, province_name, district_id, district_name, sub_district_id, sub_district_name, zip_code, phone, is_default]
+        );
+
+        res.status(201).json({
+            success: true,
+            user_addresses_id: result.insertId,
+            shippingAddress: shippingAddress,
+            message: "เพิ่มที่อยู่สำเร็จ"
+        });
+
+    } catch (err) {
+        console.error("Error saving address:", err);
+        res.status(500).json({ error: "เกิดข้อผิดพลาดในการบันทึกที่อยู่" });
+    }
+});
+
+// ตั้งค่าที่อยู่หลัก
+route.post("/user/shippingAddress/default", async (req, res) => {
+    const { user_id, user_addresses_id } = req.body;
+    if (!user_id || !user_addresses_id)
+        return res.status(400).json({ error: "user_id and user_addresses_id required" });
+
+    try {
+        // ลบ default เก่า
+        await db.promise().query(
+            `UPDATE user_addresses SET is_default = 0 WHERE user_id = ? AND is_default = 1`,
+            [user_id]
+        );
+
+        // ตั้ง default ใหม่
+        await db.promise().query(
+            `UPDATE user_addresses SET is_default = 1 WHERE user_id = ? AND user_addresses_id = ?`,
+            [user_id, user_addresses_id]
+        );
+
+        res.json({ success: true, message: "ตั้งค่าที่อยู่เริ่มต้นเรียบร้อยแล้ว" });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Internal server error" });
+    }
+});
+
+// แก้ไขที่อยู่
+route.put("/user/shippingAddress", async (req, res) => {
+    const {
+        user_id,
+        user_addresses_id,
+        shippingAddress,
+        province_id,
+        district_id,
+        sub_district_id,
+        province_name,
+        district_name,
+        sub_district_name,
+        zip_code,
+        is_default,
+        phone
+    } = req.body;
+
+    if (!user_id || !user_addresses_id || !shippingAddress) {
+        return res.status(400).json({ error: "ข้อมูลไม่ครบถ้วน" });
+    }
+
+    try {
+        // ถ้า is_default = 1 → เคลียร์ default address เดิม
+        if (is_default === 1) {
+            await db.promise().query(
+                "UPDATE user_addresses SET is_default = 0 WHERE user_id = ?",
+                [user_id]
+            );
+        }
+
+        // อัปเดต address
+        await db.promise().query(
+            `UPDATE user_addresses
+             SET shippingAddress = ?,province_id = ?, province_name = ?, district_id =? ,district_name = ?, sub_district_id = ?,sub_district_name = ?, zip_code = ?, phone = ? ,is_default = ?, updated_at = NOW()
+             WHERE user_addresses_id = ? AND user_id = ?`,
+            [
+                shippingAddress,
+                province_id,
+                province_name,
+                district_id,
+                district_name,
+                sub_district_id,
+                sub_district_name,
+                zip_code,
+                phone,
+                is_default,
+                user_addresses_id,
+                user_id
+            ]
+        );
+
+        res.json({ success: true, message: "แก้ไขที่อยู่สำเร็จ" });
+
+    } catch (err) {
+        console.error("Error updating address:", err);
+        res.status(500).json({ error: "เกิดข้อผิดพลาดในการแก้ไขที่อยู่" });
+    }
+});
+
+// ลบที่อยู่ แบบsoft delete
+route.delete("/user/shippingAddress/:id", async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        await db.promise().query(
+            "UPDATE user_addresses SET deleted_at = NOW() WHERE user_addresses_id = ?",
+            [id]
+        );
+
+        res.json({ success: true, message: "ลบที่อยู่เรียบร้อยแล้ว (soft delete)" });
+    } catch (err) {
+        console.error("Error soft deleting address:", err);
+        res.status(500).json({ success: false, message: "เกิดข้อผิดพลาด" });
+    }
+});
 
 // ดึงข้อมูลสินค้าทั้งหมด
 route.get('/', (req, res) => {
@@ -832,11 +1022,21 @@ route.delete('/cart/:productId', (req, res) => {
 
 // จ่ายเงินอันเดิม
 route.post('/checkout', upload.single('paymentSlip'), async (req, res) => {
-    const {products, shippingAddress } = req.body;
+    const {products, user_addresses_id } = req.body;
     const user_id = req.session.user?.id;
 
-    if (!user_id || !products || !shippingAddress) {
+    if (!user_id || !products || !user_addresses_id) {
         return res.status(400).json({ error: "ข้อมูลไม่ครบถ้วน" });
+    }
+
+    // (พลอยเพิ่ม)ดึงข้อมูลที่อยู่จาก user_addresses
+    const [addrRows] = await db.promise().query(
+        `SELECT * FROM user_addresses WHERE user_addresses_id = ?`,
+        [user_addresses_id]
+    );
+
+    if (!addrRows.length) {
+        return res.status(400).json({ error: "ที่อยู่ไม่ถูกต้อง" });
     }
 
     let parsedProducts;
@@ -907,11 +1107,11 @@ route.post('/checkout', upload.single('paymentSlip'), async (req, res) => {
                 quantity, 
                 order_status, 
                 total_amount, 
-                shippingAddress, 
+                user_addresses_id,
                 order_date
             )
             VALUES (?, ?, 'pending', ?, 'pending_verification', ?, ?, NOW())`,
-            [user_id, sellerId, total_quantity, total_amount, shippingAddress]
+            [user_id, sellerId, total_quantity, total_amount, user_addresses_id]
         );
 
         const orderId = orderResult.insertId;
@@ -968,7 +1168,6 @@ route.post('/checkout', upload.single('paymentSlip'), async (req, res) => {
         res.status(500).json({ error: "เกิดข้อผิดพลาดในการสั่งซื้อ" });
     }
 });
-
 
 // ฟังก์ชันแจ้งเตือนแอดมินและผู้ขายเมื่อมีการสั่งซื้อใหม่
 async function notifyAdminNewOrder(orderId, buyerId) {
