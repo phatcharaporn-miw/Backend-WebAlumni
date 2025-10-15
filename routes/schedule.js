@@ -1,6 +1,6 @@
 const cron = require('node-cron');
 const db = require('../db'); 
-const sendCustomEmail = require('../routes/emailSender');
+// const sendCustomEmail = require('../routes/emailSender');
 const dayjs = require('dayjs');
 const startTime = Date.now();
 //วันเกิด

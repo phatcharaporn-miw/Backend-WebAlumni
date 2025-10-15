@@ -505,19 +505,120 @@ router.delete('/webboard/:webboardId/comment/:commentId/reply/:replyId', LoggedI
 
 
 //กดใจกระทู้ และแจ้งเตือน
+// router.post('/webboard/:postId/favorite', LoggedIn, checkActiveUser, (req, res) => {
+//   const { postId } = req.params;
+//   const userId = req.session.user?.id;
+
+//   // ดึง full_name ของผู้ที่กดไลก์จากฐานข้อมูล
+//   const queryGetUser = `
+//       SELECT p.full_name, l.username, r.role_name 
+//       FROM profiles p
+//       JOIN users u ON u.user_id = p.user_id
+//       JOIN role r ON u.role_id = r.role_id
+//       LEFT JOIN login l ON l.user_id = u.user_id 
+//       WHERE p.user_id = ?
+//     `;
+
+//   db.query(queryGetUser, [userId], (err, userResults) => {
+//     if (err) {
+//       console.error('Error fetching user full_name:', err);
+//       return res.status(500).json({ success: false, message: 'Database error' });
+//     }
+
+//     if (userResults.length === 0) {
+//       return res.status(404).json({ success: false, message: 'ไม่พบผู้ใช้' });
+//     }
+
+//     const userRole = userResults[0].role;  // role ของผู้ใช้
+//     let likedBy;
+
+//     // ดึง user_id ของเจ้าของกระทู้
+//     const queryGetPostOwner = `SELECT user_id FROM webboard WHERE webboard_id = ?`;
+
+//     db.query(queryGetPostOwner, [postId], (err, postResults) => {
+//       if (err) {
+//         console.error('Error fetching post owner:', err);
+//         return res.status(500).json({ success: false, message: 'Database error' });
+//       }
+
+//       if (postResults.length === 0) {
+//         return res.status(404).json({ success: false, message: 'ไม่พบกระทู้' });
+//       }
+
+//       const postOwnerId = postResults[0].user_id;
+
+//       // ตรวจสอบว่าผู้ใช้กดไลก์โพสต์นี้แล้วหรือยัง
+//       const queryCheck = `SELECT status FROM favorite WHERE user_id = ? AND webboard_id = ?`;
+
+//       db.query(queryCheck, [userId, postId], (err, results) => {
+//         if (err) {
+//           console.error('Error checking favorite:', err);
+//           return res.status(500).json({ success: false, message: 'Database error' });
+//         }
+
+//         if (results.length > 0) {
+//           const currentStatus = results[0].status;
+//           const newStatus = currentStatus === 1 ? 0 : 1;
+
+//           const queryUpdate = `UPDATE favorite SET status = ?, updated_at = NOW() WHERE user_id = ? AND webboard_id = ?`;
+//           db.query(queryUpdate, [newStatus, userId, postId], (err) => {
+//             if (err) {
+//               console.error('Error updating favorite:', err);
+//               return res.status(500).json({ success: false, message: 'Database error' });
+//             }
+
+//             res.json({ success: true, message: newStatus === 1 ? 'เพิ่มลงในรายการถูกใจ' : 'ลบออกจากรายการถูกใจ', status: newStatus });
+//           });
+//         } else {
+//           const queryInsert = `INSERT INTO favorite (user_id, webboard_id, liked_by, status, created_at, updated_at) VALUES (?, ?, ?, 1, NOW(), NOW())`;
+
+//           db.query(queryInsert, [userId, postId, likedBy], (err) => {
+//             if (err) {
+//               console.error('Error inserting favorite:', err);
+//               return res.status(500).json({ success: false, message: 'Database error' });
+//             }
+
+//             // เพิ่มการแจ้งเตือน
+//             const queryNotification = `
+//                             INSERT INTO notifications (user_id, type, message, related_id, status, send_date)
+//                             VALUES (?, 'like', ?, ?, 'ยังไม่อ่าน', NOW())
+//                             ON DUPLICATE KEY UPDATE 
+//                             message = VALUES(message),
+//                             send_date = NOW(),
+//                             status = 'ยังไม่อ่าน';
+//                         `;
+//             const message = `${likedBy} ถูกใจโพสต์ของคุณ`;
+
+//             db.query(queryNotification, [postOwnerId, message, postId], (err) => {
+//               if (err) {
+//                 console.error('Error creating notification:', err);
+//                 return res.status(500).json({ success: false, message: 'Database error' });
+//               }
+
+//               logWebboard(userId, postId, 'กดถูกใจกระทู้');
+              
+//               res.json({ success: true, message: 'เพิ่มลงในรายการถูกใจและสร้างการแจ้งเตือนสำเร็จ', status: 1 });
+//             });
+//           });
+//         }
+//       });
+//     });
+//   });
+// });
+
 router.post('/webboard/:postId/favorite', LoggedIn, checkActiveUser, (req, res) => {
   const { postId } = req.params;
   const userId = req.session.user?.id;
 
   // ดึง full_name ของผู้ที่กดไลก์จากฐานข้อมูล
   const queryGetUser = `
-      SELECT p.full_name, l.username, r.role_name 
-      FROM profiles p
-      JOIN users u ON u.user_id = p.user_id
-      JOIN role r ON u.role_id = r.role_id
-      LEFT JOIN login l ON l.user_id = u.user_id 
-      WHERE p.user_id = ?
-    `;
+    SELECT p.full_name, l.username, r.role_name 
+    FROM profiles p
+    JOIN users u ON u.user_id = p.user_id
+    JOIN role r ON u.role_id = r.role_id
+    LEFT JOIN login l ON l.user_id = u.user_id 
+    WHERE p.user_id = ?
+  `;
 
   db.query(queryGetUser, [userId], (err, userResults) => {
     if (err) {
@@ -529,8 +630,8 @@ router.post('/webboard/:postId/favorite', LoggedIn, checkActiveUser, (req, res) 
       return res.status(404).json({ success: false, message: 'ไม่พบผู้ใช้' });
     }
 
-    const userRole = userResults[0].role;  // role ของผู้ใช้
-    let likedBy;
+    const likedBy = userResults[0].full_name; 
+    const userRole = userResults[0].role_name;
 
     // ดึง user_id ของเจ้าของกระทู้
     const queryGetPostOwner = `SELECT user_id FROM webboard WHERE webboard_id = ?`;
@@ -570,7 +671,10 @@ router.post('/webboard/:postId/favorite', LoggedIn, checkActiveUser, (req, res) 
             res.json({ success: true, message: newStatus === 1 ? 'เพิ่มลงในรายการถูกใจ' : 'ลบออกจากรายการถูกใจ', status: newStatus });
           });
         } else {
-          const queryInsert = `INSERT INTO favorite (user_id, webboard_id, liked_by, status, created_at, updated_at) VALUES (?, ?, ?, 1, NOW(), NOW())`;
+          const queryInsert = `
+            INSERT INTO favorite (user_id, webboard_id, liked_by, status, created_at, updated_at)
+            VALUES (?, ?, ?, 1, NOW(), NOW())
+          `;
 
           db.query(queryInsert, [userId, postId, likedBy], (err) => {
             if (err) {
@@ -579,15 +683,15 @@ router.post('/webboard/:postId/favorite', LoggedIn, checkActiveUser, (req, res) 
             }
 
             // เพิ่มการแจ้งเตือน
-            const queryNotification = `
-                            INSERT INTO notifications (user_id, type, message, related_id, status, send_date)
-                            VALUES (?, 'like', ?, ?, 'ยังไม่อ่าน', NOW())
-                            ON DUPLICATE KEY UPDATE 
-                            message = VALUES(message),
-                            send_date = NOW(),
-                            status = 'ยังไม่อ่าน';
-                        `;
             const message = `${likedBy} ถูกใจโพสต์ของคุณ`;
+            const queryNotification = `
+              INSERT INTO notifications (user_id, type, message, related_id, status, send_date)
+              VALUES (?, 'like', ?, ?, 'ยังไม่อ่าน', NOW())
+              ON DUPLICATE KEY UPDATE 
+                message = VALUES(message),
+                send_date = NOW(),
+                status = 'ยังไม่อ่าน';
+            `;
 
             db.query(queryNotification, [postOwnerId, message, postId], (err) => {
               if (err) {
@@ -596,7 +700,6 @@ router.post('/webboard/:postId/favorite', LoggedIn, checkActiveUser, (req, res) 
               }
 
               logWebboard(userId, postId, 'กดถูกใจกระทู้');
-              
               res.json({ success: true, message: 'เพิ่มลงในรายการถูกใจและสร้างการแจ้งเตือนสำเร็จ', status: 1 });
             });
           });
@@ -605,6 +708,7 @@ router.post('/webboard/:postId/favorite', LoggedIn, checkActiveUser, (req, res) 
     });
   });
 });
+
 
 //ดึงข้อมูล favorite จากการกดใจของ user
 router.get('/favorite', LoggedIn, checkActiveUser, (req, res) => {

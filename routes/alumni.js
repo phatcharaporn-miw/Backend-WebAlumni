@@ -1,6 +1,12 @@
 var express = require('express');
 var router = express.Router();
 var db = require('../db');
+const multer = require('multer');
+const xlsx = require('xlsx');
+const bcrypt = require('bcrypt');
+
+const upload = multer({ dest: "uploads/" });
+
 
 const majorMap = {
   cs: 'วิทยาการคอมพิวเตอร์',
@@ -192,5 +198,142 @@ router.get('/:userId', (req, res) => {
     });
 });
 
+// อัปโหลด Excel
+// router.post("/upload-excel", upload.single("excelFile"), (req, res) => {
+//     try {
+//         // อ่านไฟล์ Excel
+//         const workbook = xlsx.readFile(req.file.path);
+//         const sheetName = workbook.SheetNames[0];
+//         const sheet = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+
+//         if (sheet.length === 0) {
+//             return res.status(400).json({ success: false, message: "ไฟล์ไม่มีข้อมูล" });
+//         }
+
+//         // วนบันทึกข้อมูล
+//         sheet.forEach((row) => {
+//             const {
+//                 full_name,
+//                 title,
+//                 email,
+//                 degree_id,
+//                 major_id,
+//                 studentId,
+//                 graduation_year,
+//                 entry_year,
+//             } = row;
+
+//             if (!full_name || !email) return; // ข้ามถ้าไม่มีข้อมูลหลัก
+
+//             // แทรกข้อมูลในตาราง users ก่อน (เพื่อสร้าง user_id)
+//             db.query(
+//                 "INSERT INTO users (role_id, created_at, updated_at) VALUES (?, NOW(), NOW())",
+//                 [3], // role 3 = alumni
+//                 (err, userResult) => {
+//                     if (err) {
+//                         console.error("Insert users error:", err);
+//                         return;
+//                     }
+
+//                     const userId = userResult.insertId;
+
+//                     // บันทึกลง profiles
+//                     db.query(
+//                         "INSERT INTO profiles (user_id, full_name, title, email, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW())",
+//                         [userId, full_name, title, email],
+//                         (err) => {
+//                             if (err) console.error("Insert profiles error:", err);
+//                         }
+//                     );
+
+//                     // บันทึกลง educations
+//                     db.query(
+//                         "INSERT INTO educations (user_id, degree_id, major_id, studentId, graduation_year, entry_year, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())",
+//                         [userId, degree_id, major_id, studentId, graduation_year, entry_year],
+//                         (err) => {
+//                             if (err) console.error("Insert educations error:", err);
+//                         }
+//                     );
+//                 }
+//             );
+//         });
+
+//         res.json({ success: true, message: "นำเข้าข้อมูลสำเร็จ!" });
+//     } catch (error) {
+//         console.error(error);
+//         res.status(500).json({ success: false, message: "เกิดข้อผิดพลาดขณะนำเข้าไฟล์" });
+//     }
+// });
+
+router.post("/upload-excel", upload.single("excelFile"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ message: "กรุณาเลือกไฟล์" });
+
+    const workbook = xlsx.readFile(req.file.path);
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = xlsx.utils.sheet_to_json(sheet);
+
+    if (!rows.length) return res.status(400).json({ message: "ไฟล์ว่าง" });
+
+    const defaultPassword = "alumnicollegeofcomputing";
+    const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+
+    let insertedCount = 0;
+    let skippedCount = 0;
+
+    for (const row of rows) {
+  const { studentId, full_name,title, email, degree_id, major_id, entry_year, graduation_year } = row;
+  if (!studentId) continue;
+
+  // ตรวจสอบว่ามี username อยู่แล้ว
+  const [exist] = await db.promise().query(
+    "SELECT COUNT(*) AS count FROM login WHERE username = ?",
+    [studentId]
+  );
+
+  if (exist[0].count > 0) {
+    skippedCount++;
+    continue;
+  }
+
+  //สร้าง users
+  const [userResult] = await db.promise().query(
+    "INSERT INTO users (role_id, is_active, created_at) VALUES (?, ?, NOW())",
+    [3, 1]
+  );
+  const userId = userResult.insertId;
+
+  //สร้าง login
+  await db.promise().query(
+    "INSERT INTO login (user_id, username, password, is_first_login) VALUES (?, ?, ?, ?)",
+    [userId, studentId, hashedPassword, 1]
+  );
+
+  //สร้าง profiles
+  await db.promise().query(
+    "INSERT INTO profiles (user_id, full_name, title, email, created_at) VALUES (?, ?, ?, ?, NOW())",
+    [userId, full_name || "", title,  email || ""]
+  );
+
+  //เพิ่ม education
+  await db.promise().query(
+    "INSERT INTO educations (user_id, studentId, degree_id, major_id, entry_year, graduation_year) VALUES (?, ?, ?, ?, ?, ?)",
+    [userId, studentId, degree_id, major_id, entry_year || null, graduation_year || null]
+  );
+
+  insertedCount++;
+}
+
+
+    res.json({
+      success: true,
+      message: `เพิ่มศิษย์เก่าใหม่ ${insertedCount} รายการ, ข้าม ${skippedCount} รายการ`,
+      note: "รหัสผ่านเริ่มต้น: alumnicollegeofcomputing",
+    });
+  } catch (err) {
+    console.error("Upload error:", err);
+    res.status(500).json({ message: "เกิดข้อผิดพลาดระหว่างอัปโหลด" });
+  }
+});
 
 module.exports = router;

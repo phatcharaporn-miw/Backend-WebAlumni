@@ -1,35 +1,13 @@
-// var mysql = require('mysql2');
-// const fs = require('fs');
-
-// // สร้างการเชื่อมต่อฐานข้อมูล
-// const db = mysql.createConnection({
-//   host: 'localhost',      
-//   user: 'root',           
-//   password: '',           
-//   database: 'pj_webalumni' 
-// });
-
-// // เชื่อมต่อกับฐานข้อมูล
-// db.connect((err) => {
-//   if (err) {
-//     console.error('Database connection error: ' + err.stack);
-//     return;
-//   }
-//   console.log('Connected to MySQL as id ' + db.threadId);
-// });
-
-
-// module.exports = db;
-
-
 const mysql = require('mysql2');
 const util = require('util');
 
+require('dotenv').config();
+
 const db = mysql.createConnection({
-  host: 'localhost',
-  user: 'root',
-  password: '',
-  database: 'pj_webalumni'
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME
 });
 
 db.connect(err => {

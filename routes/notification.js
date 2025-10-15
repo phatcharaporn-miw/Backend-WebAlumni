@@ -24,7 +24,7 @@ router.get('/notification/:userId', (req, res) => {
 
     db.query(query, [userId], (err, results) => {
         if (err) {
-            console.error('❌ ดึงการแจ้งเตือนล้มเหลว:', err);
+            console.error('ดึงการแจ้งเตือนล้มเหลว:', err);
             return res.status(500).json({ success: false, message: 'Database error' });
         }
 
@@ -51,7 +51,7 @@ router.post('/add-notification', (req, res) => {
 
   db.query(checkQuery, [user_id, type, message, related_id, related_id], (err, result) => {
     if (err) {
-      console.error("❌ Database error:", err);
+      console.error("Database error:", err);
       return res.status(500).json({ success: false, message: 'Database error' });
     }
 
@@ -64,10 +64,10 @@ router.post('/add-notification', (req, res) => {
       `;
       db.query(updateQuery, [send_date, result[0].notification_id], (err2) => {
         if (err2) {
-          console.error("❌ Update failed:", err2);
+          console.error("Update failed:", err2);
           return res.status(500).json({ success: false, message: 'Update failed' });
         }
-        res.json({ success: true, message: '✅ Updated existing notification' });
+        res.json({ success: true, message: 'Updated existing notification' });
       });
 
     } else {
@@ -78,10 +78,10 @@ router.post('/add-notification', (req, res) => {
       `;
       db.query(insertQuery, [user_id, type, message, related_id, send_date], (err3) => {
         if (err3) {
-          console.error("❌ Insert failed:", err3);
+          console.error("Insert failed:", err3);
           return res.status(500).json({ success: false, message: 'Insert failed' });
         }
-        res.json({ success: true, message: '✅ Notification created' });
+        res.json({ success: true, message: 'Notification created' });
       });
     }
   });

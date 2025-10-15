@@ -31,7 +31,10 @@ app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.use(cors({
-    origin: 'http://localhost:3002', // เปลี่ยนเป็น URL ของ frontend
+    origin: [
+        'http://localhost:3002',
+        'http://localhost:3003'
+      ], // เปลี่ยนเป็น URL ของ frontend
     credentials: true, 
 }));
 
@@ -80,7 +83,7 @@ var AdminAllRoute= require('./routes/admin');
 var alumniRoute= require('./routes/alumni');
 var activityRoute = require('./routes/activity'); 
 var ordersRoute = require('./routes/orders');
-// var chatRouter = require('./routes/chat');
+var sellerRouter = require('./routes/seller');
 // var LoginRouter = require('./routes/login');
 
 app.use('/api', indexRouter);
@@ -99,7 +102,7 @@ app.use('/alumni', alumniRoute);
 app.use('/activity', activityRoute); 
 app.use('/news', NewsRoute);
 app.use('/orders', ordersRoute);
-// app.use('/chat', chatRouter); 
+app.use('/seller', sellerRouter); 
 
 //for admin
 app.use('/admin', AdminAllRoute);

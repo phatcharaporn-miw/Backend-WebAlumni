@@ -83,7 +83,7 @@ route.post("/user/shippingAddress", async (req, res) => {
             return res.status(400).json({ error: "ข้อมูลไม่ครบถ้วน" });
         }
 
-        // ถ้า is_default = 1 → เคลียร์ default address เดิม
+        // ถ้า is_default = 1 จะเคลียร์ default address เดิม
         if (is_default === 1) {
             await db.promise().query(
                 "UPDATE user_addresses SET is_default = 0 WHERE user_id = ?",
@@ -160,7 +160,7 @@ route.put("/user/shippingAddress", async (req, res) => {
     }
 
     try {
-        // ถ้า is_default = 1 → เคลียร์ default address เดิม
+        // ถ้า is_default = 1 จะเคลียร์ default address เดิม
         if (is_default === 1) {
             await db.promise().query(
                 "UPDATE user_addresses SET is_default = 0 WHERE user_id = ?",
@@ -215,6 +215,56 @@ route.delete("/user/shippingAddress/:id", async (req, res) => {
 });
 
 // ดึงข้อมูลสินค้าทั้งหมด
+// route.get('/', (req, res) => {
+//     const query = `
+//     SELECT 
+//         p.product_id,
+//         p.product_name,
+//         p.description,
+//         p.price,
+//         p.image,
+//         r.role_id,
+//         COALESCE(SUM(ps.quantity - ps.sold - ps.reserved - IFNULL(pending.total_pending, 0)), 0) AS available_stock
+//     FROM products p
+//     JOIN users u ON p.user_id = u.user_id
+//     JOIN role r ON u.role_id = r.role_id
+//     LEFT JOIN product_slots ps 
+//         ON p.product_id = ps.product_id AND ps.status = 'active'
+//     LEFT JOIN (
+//         SELECT od.product_id, SUM(od.quantity) AS total_pending
+//         FROM order_detail od
+//         JOIN orders o ON od.order_id = o.order_id
+//         WHERE o.order_status = 'pending_verification'
+//         GROUP BY od.product_id
+//     ) AS pending
+//         ON pending.product_id = p.product_id
+//     WHERE p.status = "1"
+//     GROUP BY p.product_id
+// `;
+
+//     // ps.quantity → จำนวนสินค้าทั้งหมดในล็อต
+//     // ps.sold → จำนวนสินค้าที่ขายแล้ว (confirmed)
+//     // ps.reserved → จำนวนสินค้าที่อยู่ในตะกร้า
+//     // pending.total_pending → จำนวนสินค้าที่อยู่ใน order รอ admin confirm
+//     // SUM(...) → ถ้ามีหลายล็อตรวมกัน
+//     // COALESCE(..., 0) → ถ้า NULL ให้เป็น 0
+
+//     db.query(query, (err, results) => {
+//         if (err) {
+//             console.error('Database query failed:', err);
+//             return res.status(500).json({ error: 'Database query failed' });
+//         }
+
+//         const products = results.map(item => ({
+//             ...item,
+//             is_sold_out: item.available_stock <= 0  //หน้าเว็บจะแสดง “สินค้าหมด”
+//         }));
+
+//         res.json(products);
+//     });
+// });
+
+// ดึงข้อมูลสินค้าทั้งหมด
 route.get('/', (req, res) => {
     const query = `
     SELECT 
@@ -223,6 +273,7 @@ route.get('/', (req, res) => {
         p.description,
         p.price,
         p.image,
+        p.is_official, 
         r.role_id,
         COALESCE(SUM(ps.quantity - ps.sold - ps.reserved - IFNULL(pending.total_pending, 0)), 0) AS available_stock
     FROM products p
@@ -240,14 +291,8 @@ route.get('/', (req, res) => {
         ON pending.product_id = p.product_id
     WHERE p.status = "1"
     GROUP BY p.product_id
-`;
-
-    // ps.quantity → จำนวนสินค้าทั้งหมดในล็อต
-    // ps.sold → จำนวนสินค้าที่ขายแล้ว (confirmed)
-    // ps.reserved → จำนวนสินค้าที่อยู่ในตะกร้า
-    // pending.total_pending → จำนวนสินค้าที่อยู่ใน order รอ admin confirm
-    // SUM(...) → ถ้ามีหลายล็อตรวมกัน
-    // COALESCE(..., 0) → ถ้า NULL ให้เป็น 0
+    ORDER BY p.is_official DESC, p.product_id DESC 
+    `;
 
     db.query(query, (err, results) => {
         if (err) {
@@ -257,13 +302,12 @@ route.get('/', (req, res) => {
 
         const products = results.map(item => ({
             ...item,
-            is_sold_out: item.available_stock <= 0  //หน้าเว็บจะแสดง “สินค้าหมด”
+            is_sold_out: item.available_stock <= 0
         }));
 
         res.json(products);
     });
 });
-
 
 
 // ดึงรายละเอียดของสินค้า
@@ -339,7 +383,6 @@ route.get('/pending-requests', (req, res) => {
     if (!userId) {
         return res.status(401).json({ error: "ไม่ได้เข้าสู่ระบบ" });
     }
-    // ตอนนี้มีแค่สินค้า
     const query = `
     SELECT 
     products.*, role.role_id
@@ -358,11 +401,10 @@ route.get('/pending-requests', (req, res) => {
     });
 });
 
-// เพิ่มสินค้าอันใหม่ (ไม่ใช้ stock ใน products)
+// เพิ่มสินค้าอันใหม่ 
 route.post('/addsouvenir', upload.single('image'), (req, res) => {
     const { productName, description, price, quantity, paymentMethod,
         bankName, accountNumber, accountName, promptpayNumber, start_date, end_date, slot_name } = req.body;
-    // const user_id = req.body.user_id;
     const user_id = req.session.user?.id;
     const image = req.file ? req.file.filename : null;
 
@@ -402,11 +444,13 @@ route.post('/addsouvenir', upload.single('image'), (req, res) => {
 
             const payment_method_id = result.insertId;
 
-            // เพิ่มสินค้าโดยไม่ใช้ stock
+            //ตรวจสอบ role เพื่อกำหนด is_official
+            const isOfficial = (user.role_id === 1 || user.role_id === 2) ? 1 : 0;
+
             const queryProduct = `
                 INSERT INTO products 
-                (product_name, description, image, price, user_id, status, payment_method_id) 
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (product_name, description, image, price, user_id, status, payment_method_id, is_official) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             `;
             const valuesProduct = [
                 productName,
@@ -415,7 +459,8 @@ route.post('/addsouvenir', upload.single('image'), (req, res) => {
                 price,
                 user_id,
                 "0",  // ยังไม่อนุมัติ
-                payment_method_id
+                payment_method_id,
+                isOfficial
             ];
 
             db.query(queryProduct, valuesProduct, (err, result) => {
@@ -452,7 +497,7 @@ route.post('/addsouvenir', upload.single('image'), (req, res) => {
                         const notifications = resultUsers.map(row => [
                             row.user_id,
                             'souvenir_request',
-                            `มีคำขอเพิ่มของที่ระลึก: ${productName}`
+                            `มีคำขอขายของที่ระลึก: ${productName}`
                         ]);
 
                         if (notifications.length > 0) {
@@ -501,7 +546,6 @@ route.post('/addsouvenir', upload.single('image'), (req, res) => {
 
 // ดึงตะกร้ามาจ้า
 route.get('/cart', (req, res) => {
-    // const user_id = req.query.user_id;
     const user_id = req.session.user?.id;
 
     if (!user_id) {
@@ -947,7 +991,7 @@ route.put('/cart/update', (req, res) => {
     });
 });
 
-// ลบสินค้าออกจากตะกร้า - ลด reserved
+// ลบสินค้าออกจากตะกร้า
 route.delete('/cart/:productId', (req, res) => {
     const { productId } = req.params;
     const userId = req.session.user?.id;
@@ -1050,7 +1094,7 @@ route.post('/checkout', upload.single('paymentSlip'), async (req, res) => {
         return res.status(400).json({ error: "ไม่มีรายการสินค้า" });
     }
 
-    // ตรวจสอบว่าทุก product มี user_id (seller_id) หรือไม่
+    // ตรวจสอบว่าทุก product มี seller_id หรือไม่
     let sellerId;
     let sellerProducts = parsedProducts;
     if (parsedProducts.length > 0 && parsedProducts[0].user_id) {
@@ -1128,13 +1172,11 @@ route.post('/checkout', upload.single('paymentSlip'), async (req, res) => {
 
         const paymentId = paymentResult.insertId;
 
-        // อัปเดต payment_id ในตาราง orders
         await db.promise().query(
             `UPDATE orders SET payment_id = ? WHERE order_id = ?`,
             [paymentId, orderId]
         );
 
-        // บันทึก log การอัปโหลดสลิป
         if (slipPath) {
             logOrder(user_id, orderId, "อัปโหลดสลิปการชำระเงิน");
         }
@@ -1150,7 +1192,7 @@ route.post('/checkout', upload.single('paymentSlip'), async (req, res) => {
 
         await Promise.all(insertItems);
 
-        // ลบสินค้าจากตะกร้า (เฉพาะของ seller นี้)
+        // ลบสินค้าจากตะกร้า
         const productIds = sellerProducts.map(p => p.product_id);
         await db.promise().query(
             `DELETE FROM cart WHERE user_id = ? AND product_id IN (${productIds.map(() => '?').join(',')})`,

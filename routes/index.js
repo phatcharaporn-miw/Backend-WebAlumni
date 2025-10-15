@@ -57,8 +57,8 @@ router.post('/login', (req, res) => {
         id: user.user_id,
         username: user.username,
         role: user.role_id,
-        is_active: user.is_active,   // เพิ่ม
-        image_path: user.image_path  // เผื่อ frontend ใช้
+        is_active: user.is_active,  
+        image_path: user.image_path  
       };
 
       console.log("Session after login:", req.session.user);
@@ -79,8 +79,99 @@ router.post('/login', (req, res) => {
   });
 });
 
+// router.post('/login', (req, res) => {
+//   console.log("Login request body:", req.body);
+//   const { username, password } = req.body;
+
+//   if (!username || !password) {
+//     return res.status(400).json({ success: false, message: 'กรุณากรอก username และ password' });
+//   }
+
+//   const query = `
+//     SELECT login.*, role.role_id, profiles.image_path, users.is_active
+//     FROM login
+//     JOIN users ON login.user_id = users.user_id
+//     JOIN role ON users.role_id = role.role_id
+//     JOIN profiles ON users.user_id = profiles.user_id
+//     WHERE login.username = ?
+//   `;
+
+//   db.query(query, [username], (err, results) => {
+//     if (err) {
+//       console.error('Database error:', err);
+//       return res.status(500).json({ success: false, message: 'Database error' });
+//     }
+
+//     if (results.length === 0) {
+//       return res.status(401).json({ success: false, message: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" });
+//     }
+
+//     const user = results[0];
+
+//     //ตรวจสอบว่าถ้าเป็น first login และรหัสผ่านตรงกับค่า default
+//     const defaultPassword = "alumnicollegeofcomputing";
+//     const isDefaultPassword = password === defaultPassword && user.is_first_login === 1;
+
+//     if (isDefaultPassword) {
+//       req.session.user = {
+//         id: user.user_id,
+//         username: user.username,
+//         role: user.role_id,
+//         is_active: user.is_active,
+//         image_path: user.image_path
+//       };
+
+//       return res.json({
+//         success: true,
+//         message: "เข้าสู่ระบบครั้งแรก โปรดเปลี่ยนรหัสผ่านใหม่",
+//         userId: user.user_id,
+//         role: user.role_id,
+//         username: user.username,
+//         image_path: user.image_path,
+//         firstLogin: true
+//       });
+//     }
+
+//     // ตรวจสอบรหัสผ่านจริงจาก bcrypt
+//     bcrypt.compare(password, user.password, (err, match) => {
+//       if (err) {
+//         console.error('Error comparing passwords:', err);
+//         return res.status(500).json({ success: false, message: 'Error comparing password' });
+//       }
+
+//       if (!match) {
+//         return res.status(401).json({ success: false, message: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" });
+//       }
+
+//       if (parseInt(user.is_active) === 0) {
+//         return res.status(403).json({ success: false, message: "บัญชีของคุณถูกระงับการใช้งาน" });
+//       }
+
+//       req.session.user = {
+//         id: user.user_id,
+//         username: user.username,
+//         role: user.role_id,
+//         is_active: user.is_active,
+//         image_path: user.image_path
+//       };
+
+//       const firstLogin = parseInt(user.role_id) === 3 && user.is_first_login === 1;
+
+//       res.json({
+//         success: true,
+//         message: 'เข้าสู่ระบบสำเร็จ!',
+//         userId: user.user_id,
+//         role: user.role_id,
+//         username: user.username,
+//         image_path: user.image_path,
+//         firstLogin
+//       });
+//     });
+//   });
+// });
 
 // Logout Route
+
 router.post('/logout', (req, res) => {
   // ลบ session ทั้งหมดเพื่อออกจากระบบ
   req.session.destroy((err) => {
@@ -169,7 +260,7 @@ router.post("/forgot-password", (req, res) => {
 
     const userId = result[0].user_id;
 
-    console.log("📦 จะอัปเดต OTP:", { otp, otpExpiry, userId });
+    console.log("จะอัปเดต OTP:", { otp, otpExpiry, userId });
 
     db.query(
       `UPDATE users SET otp = ?, otp_expiry = ? WHERE user_id = ?`,
@@ -180,7 +271,7 @@ router.post("/forgot-password", (req, res) => {
           return res.status(500).json({ success: false, message: "อัปเดต OTP ไม่สำเร็จ" });
         }
 
-        console.log("✅ OTP ถูกอัปเดตแล้ว:", updateResult);
+        console.log("OTP ถูกอัปเดตแล้ว:", updateResult);
         transport.sendMail({
           from: '"Alumni System" <no-reply@alumni.com>',
           to: email,
@@ -188,7 +279,7 @@ router.post("/forgot-password", (req, res) => {
           html: `<p>รหัส OTP ของคุณคือ: <strong>${otp}</strong> (หมดอายุใน 10 นาที)</p>`,
         }, (err, info) => {
           if (err) return res.status(500).json({ success: false, message: "ส่งอีเมลไม่สำเร็จ" });
-          console.log("📤 ส่งอีเมลสำเร็จ:", info.messageId);
+          console.log(" ส่งอีเมลสำเร็จ:", info.messageId);
           res.json({ success: true });
         });
       }
@@ -292,6 +383,7 @@ router.post('/check-fullName', (req, res) => {
     }
   });
 });
+
 
 
 module.exports = router;
