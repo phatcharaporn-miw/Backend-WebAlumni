@@ -197,13 +197,13 @@ var transport = nodemailer.createTransport({
 
 
 //เอาไว้เช็คการ hash password
-// const password = "Admin12345678";
+// const password = "Phatcha12345678";
 // bcrypt.hash(password, 10, (err, hash) => {
 //   if (err) throw err;
 //   console.log("Hashed password:", hash);
 
 //   const query = 'UPDATE login SET password = ? WHERE username = ?';
-//   db.query(query, [hash, 'ad_min'], (err, result) => {
+//   db.query(query, [hash, 'phatcha'], (err, result) => {
 //     if (err) throw err;
 //     console.log('Password updated!');
 //   });

@@ -117,13 +117,11 @@ router.post('/orders-status/:orderId', async (req, res) => {
     const { order_status, tracking_number, transport_company_id } = req.body;
     const { orderId } = req.params;
     const sellerId = req.session.user?.user_id;
+    console.log("Session user:", req.session.user);
 
-    if (!sellerId) {
-        return res.status(401).json({ error: "ไม่พบข้อมูลผู้ใช้" });
-    }
 
     try {
-        // 1. เริ่ม Transaction
+        // ริ่ม Transaction
         await new Promise((resolve, reject) => {
             db.beginTransaction(err => {
                 if (err) return reject(err);
@@ -131,7 +129,7 @@ router.post('/orders-status/:orderId', async (req, res) => {
             });
         });
 
-        // 2. ตรวจสอบสิทธิ์ผู้ขาย
+        // ตรวจสอบสิทธิ์ผู้ขาย
         const checkQuery = `
             SELECT DISTINCT o.order_id 
             FROM orders o
@@ -141,19 +139,16 @@ router.post('/orders-status/:orderId', async (req, res) => {
         `;
         const rows = await db.query(checkQuery, [orderId, sellerId]);
 
-        if (!rows || rows.length === 0) {
-            throw new Error("คุณไม่มีสิทธิ์อัปเดตคำสั่งซื้อนี้"); 
-        }
 
-        // 3. อัปเดตสถานะคำสั่งซื้อ (ตาราง orders)
+        // อัปเดตสถานะคำสั่งซื้อ (ตาราง orders)
         const updateOrderQuery = `
             UPDATE orders 
-            SET order_status = ?, tracking_number = ?, transport_company_id = ?, updated_at = NOW()
+            SET order_status = ?, tracking_number = ?, transport_company_id = ?, update_at = NOW()
             WHERE order_id = ?
         `;
         await db.query(updateOrderQuery, [order_status, tracking_number, transport_company_id, orderId]);
 
-        // 4. อัปเดตสถานะการชำระเงินเป็น 'paid' 
+        // อัปเดตสถานะการชำระเงินเป็น 'paid' 
         const updatePaymentQuery = `
             UPDATE payment 
             SET payment_status = 'paid', updated_at = NOW()
@@ -162,13 +157,13 @@ router.post('/orders-status/:orderId', async (req, res) => {
         await db.query(updatePaymentQuery, [orderId]);
 
 
-        // 5. จัดการหักจำนวนสินค้าใน product_slots (ถ้าสถานะเป็น 'shipping')
+        // จัดการหักจำนวนสินค้าใน product_slots (ถ้าสถานะเป็น 'shipping')
         if (order_status === "shipping") {
             await deductProductSlots(orderId, sellerId); 
             await notifyBuyer(orderId, tracking_number); 
         }
 
-        // 6. Commit Transaction เมื่อทุกอย่างสำเร็จ
+        // Commit Transaction เมื่อทุกอย่างสำเร็จ
         await new Promise((resolve, reject) => {
             db.commit(err => {
                 if (err) return reject(err);
@@ -179,7 +174,7 @@ router.post('/orders-status/:orderId', async (req, res) => {
         res.json({ success: true, message: "อัปเดตสถานะ, การชำระเงิน, และจัดการ slot เรียบร้อย" });
 
     } catch (error) {
-        // 7. จัดการข้อผิดพลาดและ Rollback
+        // จัดการข้อผิดพลาดและ Rollback
         await new Promise(resolve => {
             db.rollback(() => {
                 resolve(); 
