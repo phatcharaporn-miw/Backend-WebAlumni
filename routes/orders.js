@@ -56,7 +56,24 @@ router.get('/admin/orders-user', (req, res) => {
       o.*,
       p.full_name AS buyer_name,
       ps.full_name AS seller_name,
-      pr.product_name
+      pr.product_name,
+      pr.image,
+
+      -- join ที่อยู่จาก user_addresses
+      ua.shippingAddress,
+      ua.sub_district_name,
+      ua.district_name,
+      ua.province_name,
+      ua.zip_code,
+      ua.phone,
+      CONCAT(
+        ua.shippingAddress, ' ',
+        ua.sub_district_name, ' ',
+        ua.district_name, ' ',
+        ua.province_name, ' ',
+        ua.zip_code
+      ) AS full_address
+
   FROM orders o
   LEFT JOIN users u ON o.user_id = u.user_id
   LEFT JOIN users s ON o.seller_id = s.user_id
@@ -65,10 +82,11 @@ router.get('/admin/orders-user', (req, res) => {
   LEFT JOIN profiles ps ON s.user_id = ps.user_id
   LEFT JOIN order_detail oi ON o.order_id = oi.order_id
   LEFT JOIN products pr ON oi.product_id = pr.product_id
+  LEFT JOIN user_addresses ua ON o.user_addresses_id = ua.user_addresses_id
   WHERE 
       o.delete_at IS NULL 
       AND (o.order_status IS NULL OR o.order_status != 'issue_reported')
-      AND pr.is_official = 1
+
   ORDER BY o.order_date DESC;
 `;
 
@@ -81,7 +99,94 @@ router.get('/admin/orders-user', (req, res) => {
   });
 });
 
+// router.get('/admin/orders-user', (req, res) => {
+//   const { orderId } = req.params;
+
+//   const query = `
+//     SELECT 
+//       o.order_id,
+//       o.user_id,
+//       o.seller_id,
+//       o.payment_id,
+//       o.transport_company_id,
+//       o.user_addresses_id,
+//       o.payment_status,
+//       o.quantity,
+//       o.tracking_number,
+//       o.order_status,
+//       o.reason,
+//       o.total_amount,
+//       o.order_date,
+//       o.proof_image,
+//       o.delivered_at,
+//       o.update_at,
+//       p.full_name AS buyer_name,
+//       ps.full_name AS seller_name,
+//       pay.payment_status AS payment_status,
+//       pay.payment_date AS payment_date,
+
+//       -- join ที่อยู่จาก user_addresses
+//       ua.shippingAddress,
+//       ua.sub_district_name,
+//       ua.district_name,
+//       ua.province_name,
+//       ua.zip_code,
+//       ua.phone,
+//       CONCAT(
+//         ua.shippingAddress, ' ',
+//         ua.sub_district_name, ' ',
+//         ua.district_name, ' ',
+//         ua.province_name, ' ',
+//         ua.zip_code
+//       ) AS full_address
+
+//     FROM orders o
+//     LEFT JOIN users u ON o.user_id = u.user_id
+//     LEFT JOIN users s ON o.seller_id = s.user_id
+//     LEFT JOIN profiles p ON u.user_id = p.user_id
+//     LEFT JOIN profiles ps ON s.user_id = ps.user_id
+//     LEFT JOIN payment pay ON o.payment_id = pay.payment_id
+//     LEFT JOIN user_addresses ua ON o.user_addresses_id = ua.user_addresses_id
+//     WHERE 
+//       o.delete_at IS NULL 
+//       AND (o.order_status IS NULL OR o.order_status != 'issue_reported')
+//       AND pr.is_official = 1
+//     ORDER BY o.order_date DESC;
+//   `;
+
+//   db.query(query, [orderId], (err, results) => {
+//     if (err) {
+//       console.error("Error fetching order details:", err);
+//       return res.status(500).json({ error: "Database error" });
+//     }
+
+//     if (results.length === 0) {
+//       return res.status(404).json({ error: "ไม่พบคำสั่งซื้อนี้" });
+//     }
+
+//     const order = results[0];
+
+//     const itemsQuery = `
+//       SELECT od.*, p.product_name, p.price, p.image
+//       FROM order_detail od
+//       JOIN products p ON od.product_id = p.product_id
+//       WHERE od.order_id = ?
+//     `;
+
+//     db.query(itemsQuery, [orderId], (err2, items) => {
+//       if (err2) {
+//         console.error("Error fetching order items:", err2);
+//         return res.status(500).json({ error: "Database error" });
+//       }
+
+//       order.items = items;
+//       res.json({ success: true, data: order });
+//     });
+//   });
+// });
+
 // แอดมินอัปเดตสถานะคำสั่งซื้อ
+
 router.post('/admin/orders-status/:orderId', (req, res) => {
   let { order_status, tracking_number, transport_company_id } = req.body;
   const { orderId } = req.params;
@@ -156,7 +261,6 @@ router.post('/admin/orders-status/:orderId', (req, res) => {
   });
 });
 
-
 // แสดงรายละเอียดคำสั่งซื้อ
 router.get('/admin/orders-detail/:orderId', (req, res) => {
   const { orderId } = req.params;
@@ -220,7 +324,6 @@ router.get('/admin/orders-detail/:orderId', (req, res) => {
     }
 
     const order = results[0];
-    // console.log("Order data fetched:", order); 
 
     const itemsQuery = `
       SELECT od.*, p.product_name, p.price, p.image
@@ -240,7 +343,6 @@ router.get('/admin/orders-detail/:orderId', (req, res) => {
     });
   });
 });
-
 
 // ผู้ขายดูคำสั่งซื้อของตัวเอง
 router.get('/orders-seller', (req, res) => {
@@ -276,7 +378,6 @@ router.get('/orders-seller', (req, res) => {
     res.json({ success: true, data: results });
   });
 });
-
 
 // ดึงสินค้าทั้งหมดของผู้ขาย พร้อมจำนวนคำสั่งซื้อ
 router.get('/seller-products', (req, res) => {
@@ -319,52 +420,66 @@ router.get('/orders-user/:userId', async (req, res) => {
   const userId = req.params.userId;
 
   try {
-    // ดึงรายการคำสั่งซื้อทั้งหมดของผู้ใช้ พร้อม tracking_number
-  const [orders] = await db.promise().query(
-    `SELECT 
-        o.order_id,
-        o.order_date,
-        o.order_status,
-        o.tracking_number,
-        o.total_amount,
-        p.full_name,
-        ua.*,
-        tc.name AS transport_company_name,
-        tc.code AS transport_company_code
-    FROM orders o
-    LEFT JOIN profiles p 
-        ON o.user_id = p.user_id
-    LEFT JOIN user_addresses ua 
-        ON o.user_addresses_id = ua.user_addresses_id
-    LEFT JOIN transport_company tc 
-        ON o.transport_company_id = tc.transport_company_id
-    WHERE o.user_id = ?
-    ORDER BY o.order_date DESC`,
-    [userId]
-  );
+    // ดึงรายการคำสั่งซื้อทั้งหมดของผู้ใช้
+    const [orders] = await db.promise().query(
+      `SELECT 
+          o.order_id,
+          o.order_date,
+          o.order_status,
+          o.tracking_number,
+          o.total_amount,
+          p.full_name,
+          ua.*,
+          tc.name AS transport_company_name,
+          tc.code AS transport_company_code
+      FROM orders o
+      LEFT JOIN profiles p 
+          ON o.user_id = p.user_id
+      LEFT JOIN user_addresses ua 
+          ON o.user_addresses_id = ua.user_addresses_id
+      LEFT JOIN transport_company tc 
+          ON o.transport_company_id = tc.transport_company_id
+      WHERE o.user_id = ?
+      ORDER BY o.order_date DESC`,
+      [userId]
+    );
 
-    // ดึงสินค้าในแต่ละคำสั่งซื้อ
-    const orderIds = orders.map(order => order.order_id);
-    if (orderIds.length === 0) {
+    if (orders.length === 0) {
       return res.json([]);
     }
 
+    // ดึงรายละเอียดสินค้าในแต่ละคำสั่งซื้อ
+    const orderIds = orders.map(order => order.order_id);
     const [orderItems] = await db.promise().query(
-      `SELECT od.*, p.product_name, p.price, p.image, p.is_official, od.order_id 
-            FROM order_detail od 
-            JOIN products p ON od.product_id = p.product_id 
-            WHERE od.order_id IN (${orderIds.map(() => '?').join(',')})`,
+      `SELECT 
+          od.order_id,
+          od.product_id,
+          od.quantity,
+          p.product_name,
+          p.price,
+          p.image,
+          p.is_official
+       FROM order_detail od
+       JOIN products p ON od.product_id = p.product_id
+       WHERE od.order_id IN (${orderIds.map(() => '?').join(',')})`,
       orderIds
     );
 
-    // รวมสินค้าเข้าไปในแต่ละ order และแสดง tracking_number ด้วย
-    const ordersWithProducts = orders.map(order => {
-      return {
-        ...order,
-        tracking_number: order.tracking_number, // เพิ่ม tracking_number 
-        products: orderItems.filter(item => item.order_id === order.order_id)
-      };
-    });
+    // รวมสินค้ากับ order หลัก
+    const ordersWithProducts = orders.map(order => ({
+      ...order,
+      products: orderItems
+        .filter(item => item.order_id === order.order_id)
+        .map(item => ({
+          product_id: item.product_id,
+          product_name: item.product_name,
+          quantity: item.quantity,
+          price: item.price,
+          subtotal: item.subtotal,
+          image: item.image,
+          is_official: item.is_official
+        }))
+    }));
 
     res.json(ordersWithProducts);
   } catch (err) {
@@ -372,6 +487,7 @@ router.get('/orders-user/:userId', async (req, res) => {
     res.status(500).json({ error: "เกิดข้อผิดพลาด" });
   }
 });
+
 
 // -------------------------------------------------------------------------------------------
 // ผู้ขายดูสินค้าที่ตัวเองสร้าง
@@ -524,12 +640,13 @@ router.get('/pending-payment', (req, res) => {
         FROM orders o
         JOIN profiles p ON o.user_id = p.user_id
         LEFT JOIN payment pay ON o.payment_id = pay.payment_id
-        WHERE o.payment_status = 'pending'
+        WHERE o.payment_status IN ('pending', 'paid', 'rejected')
         ORDER BY o.create_at DESC
     `;
 
   db.query(sql, async (err, orders) => {
     if (err) return res.status(500).json({ error: err });
+    // console.log("Orders :", orders);
 
     const orderIds = orders.map(o => o.order_id);
     if (orderIds.length === 0) return res.json([]);
@@ -556,6 +673,7 @@ router.get('/pending-payment', (req, res) => {
 
     db.query(productSql, [orderIds], (err2, orderProducts) => {
       if (err2) return res.status(500).json({ error: err2 });
+      // console.log("Products found:", orderProducts);
 
       const orderMap = {};
       orders.forEach(o => {
@@ -597,7 +715,7 @@ router.post('/verify-payment', (req, res) => {
   db.beginTransaction(err => {   //ทำให้หลาย query เป็น atomic
     if (err) return res.status(500).json({ error: err });
 
-    // 1. อัปเดต payment
+    // อัปเดต payment
     const updatePaymentSql = `
             UPDATE payment
             SET payment_status = ?, verified_by = ?, verified_at = NOW(), reject_reason = ?
@@ -606,7 +724,7 @@ router.post('/verify-payment', (req, res) => {
     db.query(updatePaymentSql, [paymentStatus, admin_id, reject_reason || null, order_id], (err) => {
       if (err) return db.rollback(() => res.status(500).json({ error: err }));
 
-      // 2. อัปเดต orders
+      // อัปเดต orders
       const updateOrderSql = `
                 UPDATE orders
                 SET payment_status = ?, order_status = ?
@@ -615,7 +733,7 @@ router.post('/verify-payment', (req, res) => {
       db.query(updateOrderSql, [paymentStatus, orderStatus, order_id], (err2) => {
         if (err2) return db.rollback(() => res.status(500).json({ error: err2 }));
 
-        // 3. ดึง user_id, seller_id และ payment_id
+        // ดึง user_id, seller_id และ payment_id
         const getOrderUserSql = `
                     SELECT o.user_id, o.seller_id, p.payment_id
                     FROM orders o
@@ -640,7 +758,7 @@ router.post('/verify-payment', (req, res) => {
             ? `ผู้ซื้อได้ชำระเงินเรียบร้อยแล้ว กรุณากรอกเลขพัสดุ`
             : null;
 
-          // 4. แจ้งผู้ซื้อ
+          // แจ้งผู้ซื้อ
           const insertBuyerNotification = `
                         INSERT INTO notifications (user_id, type, message, related_id, send_date)
                         VALUES (?, 'payment', ?, ?, NOW())
@@ -659,7 +777,7 @@ router.post('/verify-payment', (req, res) => {
               });
             }
 
-            // 5. ดึง order detail
+            // ดึง order detail
             const getOrderDetailSql = `
                             SELECT od.product_id, od.quantity, p.product_name
                             FROM order_detail od
@@ -669,7 +787,7 @@ router.post('/verify-payment', (req, res) => {
             db.query(getOrderDetailSql, [order_id], (errDetail, orderItems) => {
               if (errDetail) return db.rollback(() => res.status(500).json({ error: errDetail }));
 
-              // 6. หัก slot สำหรับแต่ละ product
+              // หัก slot สำหรับแต่ละ product
               (function processItem(index) {  //recursive function ใช้ loop แบบ async ภายในจะ loop slot ของสินค้าแต่ละชิ้น
                 if (index >= orderItems.length) {
                   // แจ้งผู้ขาย

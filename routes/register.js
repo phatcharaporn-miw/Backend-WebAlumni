@@ -1,7 +1,7 @@
 var express = require('express');
 var router = express.Router();
 var db = require('../db');
-var bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const multer = require('multer');
 var img = multer({ dest: 'img/'});
 const path = require('path');

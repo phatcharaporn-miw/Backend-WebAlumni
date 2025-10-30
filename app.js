@@ -33,8 +33,9 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(cors({
     origin: [
         'http://localhost:3002',
-        'http://localhost:3003'
-      ], // เปลี่ยนเป็น URL ของ frontend
+        'https://collegeofcomputing-alumni.netlify.app' // เปลี่ยนเป็น URL ของ frontend
+      ], 
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     credentials: true, 
 }));
 
@@ -51,12 +52,15 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: false, // ใช้ HTTPS เท่านั้นใน production
-    httpOnly: true, // ป้องกันการเข้าถึง cookie จาก JS
-    sameSite: 'lax', // หรือ 'strict' เพื่อป้องกัน CSRF
-    maxAge: 1000 * 60 * 60, 
+    // secure: true,            //ใช้ HTTPS
+    secure: false,         
+    httpOnly: true,
+    // sameSite: 'none',        //ตั้งเป็น none เพื่อให้ cookie ข้ามโดเมนได้
+    sameSite: 'lax',        
+    maxAge: 1000 * 60 * 60,  
   }
 }));
+
 
 app.use('/img', express.static(path.join(__dirname, 'img')));
 app.use('/images', express.static(path.join(__dirname, 'img')));

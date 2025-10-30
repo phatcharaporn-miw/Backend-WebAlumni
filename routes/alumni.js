@@ -3,7 +3,7 @@ var router = express.Router();
 var db = require('../db');
 const multer = require('multer');
 const xlsx = require('xlsx');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 
 const upload = multer({ dest: "uploads/" });
 
@@ -199,72 +199,6 @@ router.get('/:userId', (req, res) => {
 });
 
 // อัปโหลด Excel
-// router.post("/upload-excel", upload.single("excelFile"), (req, res) => {
-//     try {
-//         // อ่านไฟล์ Excel
-//         const workbook = xlsx.readFile(req.file.path);
-//         const sheetName = workbook.SheetNames[0];
-//         const sheet = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
-
-//         if (sheet.length === 0) {
-//             return res.status(400).json({ success: false, message: "ไฟล์ไม่มีข้อมูล" });
-//         }
-
-//         // วนบันทึกข้อมูล
-//         sheet.forEach((row) => {
-//             const {
-//                 full_name,
-//                 title,
-//                 email,
-//                 degree_id,
-//                 major_id,
-//                 studentId,
-//                 graduation_year,
-//                 entry_year,
-//             } = row;
-
-//             if (!full_name || !email) return; // ข้ามถ้าไม่มีข้อมูลหลัก
-
-//             // แทรกข้อมูลในตาราง users ก่อน (เพื่อสร้าง user_id)
-//             db.query(
-//                 "INSERT INTO users (role_id, created_at, updated_at) VALUES (?, NOW(), NOW())",
-//                 [3], // role 3 = alumni
-//                 (err, userResult) => {
-//                     if (err) {
-//                         console.error("Insert users error:", err);
-//                         return;
-//                     }
-
-//                     const userId = userResult.insertId;
-
-//                     // บันทึกลง profiles
-//                     db.query(
-//                         "INSERT INTO profiles (user_id, full_name, title, email, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW())",
-//                         [userId, full_name, title, email],
-//                         (err) => {
-//                             if (err) console.error("Insert profiles error:", err);
-//                         }
-//                     );
-
-//                     // บันทึกลง educations
-//                     db.query(
-//                         "INSERT INTO educations (user_id, degree_id, major_id, studentId, graduation_year, entry_year, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())",
-//                         [userId, degree_id, major_id, studentId, graduation_year, entry_year],
-//                         (err) => {
-//                             if (err) console.error("Insert educations error:", err);
-//                         }
-//                     );
-//                 }
-//             );
-//         });
-
-//         res.json({ success: true, message: "นำเข้าข้อมูลสำเร็จ!" });
-//     } catch (error) {
-//         console.error(error);
-//         res.status(500).json({ success: false, message: "เกิดข้อผิดพลาดขณะนำเข้าไฟล์" });
-//     }
-// });
-
 router.post("/upload-excel", upload.single("excelFile"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ message: "กรุณาเลือกไฟล์" });
@@ -324,10 +258,9 @@ router.post("/upload-excel", upload.single("excelFile"), async (req, res) => {
   insertedCount++;
 }
 
-
     res.json({
       success: true,
-      message: `เพิ่มศิษย์เก่าใหม่ ${insertedCount} รายการ, ข้าม ${skippedCount} รายการ`,
+      message: `เพิ่มศิษย์เก่า ${insertedCount} รายการ, ข้าม ${skippedCount} รายการ`,
       note: "รหัสผ่านเริ่มต้น: alumnicollegeofcomputing",
     });
   } catch (err) {

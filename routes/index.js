@@ -1,7 +1,7 @@
 var express = require('express');
 var router = express.Router();
 var db = require('../db');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const nodemailer = require('nodemailer');
 const { logUserAction } = require('../logUserAction');
 
@@ -233,6 +233,7 @@ router.post('/change-password', (req, res) => {
   });
 });
 
+
 // ลืมรหัสผ่าน
 const dayjs = require("dayjs");
 const utc = require("dayjs/plugin/utc");
@@ -244,9 +245,6 @@ router.post("/forgot-password", (req, res) => {
   const { email } = req.body;
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
   const otpExpiry = dayjs().tz("Asia/Bangkok").add(10, "minute").format("YYYY-MM-DD HH:mm:ss");
-
-  // console.log("📨 Email ที่รับมา:", email);
-  // console.log("🔧 OTP:", otp, "| หมดอายุ:", otpExpiry);
 
   const sql = `
     SELECT u.user_id FROM users u
@@ -306,13 +304,6 @@ router.post("/reset-password", (req, res) => {
     const storedOtp = user.otp;
     const otpExpiry = dayjs(user.otp_expiry).tz("Asia/Bangkok");
     const now = dayjs().tz("Asia/Bangkok");
-
-    // console.log("🔐 ตรวจ OTP:", {
-    //   storedOtp,
-    //   clientOtp: otp,
-    //   otpExpiry: otpExpiry.format(),
-    //   now: now.format()
-    // });
 
     if (String(storedOtp) !== String(otp).trim() || now.isAfter(otpExpiry)) {
       return res.status(400).json({ success: false, message: "OTP ไม่ถูกต้องหรือหมดอายุ" });
@@ -384,6 +375,201 @@ router.post('/check-fullName', (req, res) => {
   });
 });
 
+//-----------------------รายละเอียดแดชบอร์ด-------------------------
+// จำนวนผู้เข้าร่วมทั้งหมด
+router.get("/participants/activities", (req, res) => {
+  const sql = `
+    SELECT 
+      a.activity_id,
+      a.activity_name,
+      a.activity_date,  
+      COUNT(p.participant_id) AS total_participants
+    FROM activity a
+    LEFT JOIN participants p ON a.activity_id = p.activity_id
+    WHERE p.participant_id IS NOT NULL 
+    GROUP BY a.activity_id, a.activity_name, a.activity_date
+    ORDER BY a.activity_date DESC;
+  `;
+
+  db.query(sql, (err, result) => {
+    if (err) {
+      console.error(err);
+      return res.status(500).json({ success: false, message: "Database error" });
+    }
+    res.json(result); 
+  });
+});
+
+// ดึงยอดบริจาครวมทั้งหมด (เฉพาะที่จ่ายสำเร็จ)
+router.get('/donations', (req, res) => { 
+  const query = `
+    SELECT 
+      p.project_id,
+      p.project_name,
+      p.description,
+      p.donation_type,
+      p.status,
+      p.image_path,
+      p.start_date,
+      p.end_date,
+      SUM(d.amount) AS current_amount
+    FROM donationproject p
+    JOIN donations d ON p.project_id = d.project_id
+    WHERE d.payment_status = 'paid'
+    GROUP BY 
+      p.project_id, p.project_name, p.description, p.donation_type, p.status, p.image_path
+    HAVING current_amount > 0
+    ORDER BY current_amount DESC
+  `;
+
+  console.log(query);
+
+  db.query(query, (err, results) => {
+    if (err) {
+      console.error('Database query failed:', err);
+      return res.status(500).json({ error: 'Database query failed' });
+    }
+    res.json(results);
+  });
+});
+
+
+// แสดงเฉพาะกิจกรรมที่กำลังดำเนินการ
+router.get('/activities/ongoing', (req, res) => {
+  const queryActivity = `
+      SELECT 
+        activity_id,
+        activity_name,
+        activity_date,
+        description,
+        (
+          SELECT activity_image.image_path 
+          FROM activity_image 
+          WHERE activity_image.activity_id = activity.activity_id 
+          LIMIT 1
+        ) AS image_path,
+        COALESCE(end_date, activity_date) AS end_date,
+        start_time,
+        end_time,
+        registration_required,
+        max_participants,
+        batch_restriction,
+        department_restriction,
+        check_alumni,
+        created_at,
+        updated_at,
+        deleted_at,
+        CASE
+          WHEN CURDATE() > COALESCE(end_date, activity_date) THEN 1
+          WHEN CURDATE() < activity_date THEN 0
+          ELSE 2
+        END AS status,
+        (SELECT COUNT(*) FROM participants WHERE participants.activity_id = activity.activity_id) AS current_participants
+      FROM activity
+      WHERE deleted_at IS NULL
+      HAVING status = 2
+    `;
+
+  db.query(queryActivity, (err, results) => {
+    if (err) {
+      console.error('เกิดข้อผิดพลาดในการดึงกิจกรรม:', err);
+      return res.status(500).json({ error: 'เกิดข้อผิดพลาดในการดึงกิจกรรม' });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: results
+    });
+  });
+});
+
+// แก้ route /donate
+router.get('/donate/ongoing', (req, res) => {
+    const query = `
+      SELECT * 
+      FROM donationproject 
+      WHERE status = '1'
+      ORDER BY start_date DESC
+    `;
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error('Database query failed:', err);
+            return res.status(500).json({ error: 'Database query failed' });
+        }
+        res.json(results);
+    });
+});
+
+router.get("/alumni-all", (req, res) => {
+    const query = `
+        SELECT 
+            u.user_id,
+            u.role_id,
+            r.role_name,
+            u.is_active,
+            p.full_name,
+            p.email,
+            p.phone,
+            p.address,
+            p.image_path,
+            e.education_id,
+            e.degree_id,
+            e.major_id,
+            e.studentId,
+            e.graduation_year,
+            e.entry_year,
+            d.degree_name,
+            m.major_name
+        FROM users u
+        LEFT JOIN profiles p ON u.user_id = p.user_id
+        LEFT JOIN role r ON u.role_id = r.role_id
+        LEFT JOIN educations e ON u.user_id = e.user_id
+        LEFT JOIN degree d ON e.degree_id = d.degree_id
+        LEFT JOIN major m ON e.major_id = m.major_id
+        WHERE u.role_id = 3
+        ORDER BY p.full_name, e.graduation_year;
+    `;
+
+    db.query(query, (err, result) => {
+        if (err) {
+            console.error("Database query failed:", err);
+            return res.status(500).json({ success: false, message: "Database error" });
+        }
+
+        // รวมการศึกษาของแต่ละ alumni เป็น array
+        const alumniMap = {};
+        result.forEach(row => {
+            if (!alumniMap[row.user_id]) {
+                alumniMap[row.user_id] = {
+                    user_id: row.user_id,
+                    role_id: row.role_id,
+                    role_name: row.role_name,
+                    is_active: row.is_active,
+                    full_name: row.full_name,
+                    email: row.email,
+                    phone: row.phone,
+                    address: row.address,
+                    image_path: row.image_path,
+                    educations: []
+                };
+            }
+            if (row.education_id) {
+                alumniMap[row.user_id].educations.push({
+                    education_id: row.education_id,
+                    degree_id: row.degree_id,
+                    degree_name: row.degree_name,
+                    major_id: row.major_id,
+                    major_name: row.major_name,
+                    studentId: row.studentId,
+                    graduation_year: row.graduation_year,
+                    entry_year: row.entry_year
+                });
+            }
+        });
+
+        res.json({ success: true, data: Object.values(alumniMap) });
+    });
+});
 
 
 module.exports = router;

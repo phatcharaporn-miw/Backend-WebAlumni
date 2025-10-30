@@ -2,7 +2,7 @@ var express = require('express');
 var router = express.Router();
 var db = require('../db');
 var { LoggedIn, checkActiveUser } = require('../middlewares/auth');
-var bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 var multer = require('multer');
 const path = require('path');
 const { logWebboard } = require('../logUserAction');
@@ -310,16 +310,16 @@ router.post('/edit-profile', (req, res) => {
 // อัปโหลดรูปภาพโปรไฟล์
 router.post('/update-profile-image', upload.single('image_path'), async (req, res) => {
   // const userId = req.body.user_id;
-  const userId = req.session.user?.id;
+  const user_id = req.session.user?.user_id;
   const image_path = `img/${req.file.filename}`;
 
-  if (!userId || !image_path) {
-    return res.status(400).json({ message: 'ข้อมูลไม่ครบถ้วน' });
-  }
+  // if (!user_id || !image_path) {
+  //   return res.status(400).json({ message: 'ข้อมูลไม่ครบถ้วน' });
+  // }
 
   try {
     const query = 'UPDATE profiles SET image_path = ? WHERE user_id = ?';
-    await db.promise().query(query, [image_path, userId]);
+    await db.promise().query(query, [image_path, user_id]);
 
     res.status(200).json({ message: 'อัปเดตรูปสำเร็จ', newImagePath: image_path });
   } catch (err) {
@@ -327,7 +327,6 @@ router.post('/update-profile-image', upload.single('image_path'), async (req, re
     res.status(500).json({ message: 'อัปเดตรูปไม่สำเร็จ' });
   }
 });
-
 
 //กระทู้ที่เคยสร้าง
 router.get('/webboard-user/:userId', (req, res) => {

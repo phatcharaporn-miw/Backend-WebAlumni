@@ -317,7 +317,7 @@ route.get('/souvenirDetail/:id', async (req, res) => {
     try {
         // ดึงข้อมูลสินค้าและ promptpay_number
         const [productRows] = await db.promise().query(
-            `SELECT p.*, pm.promptpay_number
+            `SELECT p.*, pm.promptpay_number, pm.account_name, pm.account_number, pm.bank_name
              FROM products p
              JOIN payment_methods pm ON p.payment_method_id = pm.payment_method_id
              WHERE p.product_id = ?`,
@@ -401,11 +401,154 @@ route.get('/pending-requests', (req, res) => {
     });
 });
 
+// เพิ่มสินค้า
+// route.post('/addsouvenir', upload.single('image'), (req, res) => {
+//     const { productName, description, price, quantity, paymentMethod,
+//         bankName, accountNumber, accountName, promptpayNumber, start_date, end_date, slot_name } = req.body;
+//     const user_id = req.session.user?.id;
+//     const image = req.file ? req.file.filename : null;
+
+//     if (!image) {
+//         return res.status(400).json({ error: 'Image is required' });
+//     }
+
+//     if (!productName || !description || !price || !quantity || !paymentMethod ||
+//         !bankName || !accountNumber || !accountName || !slot_name) {
+//         return res.status(400).json({ error: 'ต้องกรอกข้อมูลทุกช่องให้ครบถ้วน' });
+//     }
+
+//     db.beginTransaction((err) => {
+//         if (err) {
+//             return res.status(500).json({ error: 'Failed to start transaction' });
+//         }
+
+//         const queryPayment = `
+//             INSERT INTO payment_methods 
+//             (method_name, bank_name, account_name, account_number, promptpay_number) 
+//             VALUES (?, ?, ?, ?, ?)
+//         `;
+//         const valuesPayment = [
+//             paymentMethod,
+//             bankName,
+//             accountName,
+//             accountNumber,
+//             promptpayNumber
+//         ];
+
+//         db.query(queryPayment, valuesPayment, (err, result) => {
+//             if (err) {
+//                 return db.rollback(() => {
+//                     return res.status(500).json({ error: 'Error inserting payment method' });
+//                 });
+//             }
+
+//             const payment_method_id = result.insertId;
+
+//             //ตรวจสอบ role เพื่อกำหนด is_official
+//             const isOfficial = (user.role_id === 1 || user.role_id === 2) ? 1 : 0;
+
+//             const queryProduct = `
+//                 INSERT INTO products 
+//                 (product_name, description, image, price, user_id, status, payment_method_id, is_official) 
+//                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+//             `;
+//             const valuesProduct = [
+//                 productName,
+//                 description,
+//                 image,
+//                 price,
+//                 user_id,
+//                 "0",  // ยังไม่อนุมัติ
+//                 payment_method_id,
+//                 isOfficial
+//             ];
+
+//             db.query(queryProduct, valuesProduct, (err, result) => {
+//                 if (err) {
+//                     return db.rollback(() => {
+//                         db.query(`DELETE FROM payment_methods WHERE payment_method_id = ?`, [payment_method_id]);
+//                         return res.status(500).json({ error: 'Error inserting product' });
+//                     });
+//                 }
+
+//                 const product_id = result.insertId;
+
+//                 // เพิ่ม slot ให้สินค้า
+//                 const querySlot = `
+//                     INSERT INTO product_slots 
+//                     (product_id, slot_name, quantity, sold, reserved, start_date, end_date, status, created_at)
+//                     VALUES (?, ?, ?, 0, 0, ?, ?, 'active', NOW())
+//                 `;
+//                 db.query(querySlot, [product_id, slot_name, quantity, start_date, end_date], (err) => {
+//                     if (err) {
+//                         return db.rollback(() => {
+//                             return res.status(500).json({ error: 'Error inserting product slot' });
+//                         });
+//                     }
+
+//                     // เพิ่มแจ้งเตือนหลังจากเพิ่มสินค้า
+//                     db.query(`SELECT user_id FROM users WHERE role_id IN (1, 2)`, (err, resultUsers) => {
+//                         if (err) {
+//                             return db.rollback(() => {
+//                                 return res.status(500).json({ error: 'Failed to fetch target users for notification' });
+//                             });
+//                         }
+
+//                         const notifications = resultUsers.map(row => [
+//                             row.user_id,
+//                             'souvenir_request',
+//                             `มีคำขอขายของที่ระลึก: ${productName}`
+//                         ]);
+
+//                         if (notifications.length > 0) {
+//                             db.query(
+//                                 `INSERT INTO notifications (user_id, type, message)
+//                                  VALUES ? 
+//                                  ON DUPLICATE KEY UPDATE 
+//                                  message = VALUES(message),
+//                                  send_date = NOW(),
+//                                  status = 'ยังไม่อ่าน';`,
+//                                 [notifications],
+//                                 (err) => {
+//                                     if (err) {
+//                                         return db.rollback(() => {
+//                                             return res.status(500).json({ error: 'Failed to insert notifications' });
+//                                         });
+//                                     }
+
+//                                     db.commit(err => {
+//                                         if (err) {
+//                                             return db.rollback(() => {
+//                                                 return res.status(500).json({ error: 'Failed to commit transaction' });
+//                                             });
+//                                         }
+//                                         return res.status(200).json({ message: 'Product, slot, payment method, and notifications added successfully' });
+//                                     });
+//                                 }
+//                             );
+//                         } else {
+//                             db.commit((err) => {
+//                                 if (err) {
+//                                     return db.rollback(() => {
+//                                         return res.status(500).json({ error: 'Failed to commit transaction' });
+//                                     });
+//                                 }
+//                                 return res.status(200).json({ message: 'Product and slot added (no users to notify)' });
+//                             });
+//                         }
+//                     });
+//                 });
+//             });
+//         });
+//     });
+// });
+
 // เพิ่มสินค้าอันใหม่ 
 route.post('/addsouvenir', upload.single('image'), (req, res) => {
     const { productName, description, price, quantity, paymentMethod,
         bankName, accountNumber, accountName, promptpayNumber, start_date, end_date, slot_name } = req.body;
-    const user_id = req.session.user?.id;
+    const user = req.session.user; 
+    const user_id = user?.id;
     const image = req.file ? req.file.filename : null;
 
     if (!image) {
@@ -444,7 +587,7 @@ route.post('/addsouvenir', upload.single('image'), (req, res) => {
 
             const payment_method_id = result.insertId;
 
-            //ตรวจสอบ role เพื่อกำหนด is_official
+            // ตรวจสอบ role เพื่อกำหนด is_official
             const isOfficial = (user.role_id === 1 || user.role_id === 2) ? 1 : 0;
 
             const queryProduct = `
@@ -473,7 +616,6 @@ route.post('/addsouvenir', upload.single('image'), (req, res) => {
 
                 const product_id = result.insertId;
 
-                // เพิ่ม slot ให้สินค้า
                 const querySlot = `
                     INSERT INTO product_slots 
                     (product_id, slot_name, quantity, sold, reserved, start_date, end_date, status, created_at)
@@ -486,7 +628,6 @@ route.post('/addsouvenir', upload.single('image'), (req, res) => {
                         });
                     }
 
-                    // เพิ่มแจ้งเตือนหลังจากเพิ่มสินค้า
                     db.query(`SELECT user_id FROM users WHERE role_id IN (1, 2)`, (err, resultUsers) => {
                         if (err) {
                             return db.rollback(() => {
@@ -542,6 +683,7 @@ route.post('/addsouvenir', upload.single('image'), (req, res) => {
         });
     });
 });
+
 
 
 // ดึงตะกร้ามาจ้า
@@ -604,7 +746,7 @@ route.post('/cart/add', (req, res) => {
     const {product_id, quantity } = req.body;
     const user_id = req.session.user?.id;
 
-    if (!user_id || !product_id || !Number.isInteger(quantity) || quantity < 1) {
+    if (!user_id || !product_id || !quantity) {
         return res.status(400).json({ message: "ข้อมูลไม่ครบถ้วนหรือไม่ถูกต้อง" });
     }
 
@@ -1211,6 +1353,192 @@ route.post('/checkout', upload.single('paymentSlip'), async (req, res) => {
     }
 });
 
+// route.post('/checkout', upload.single('paymentSlip'), async (req, res) => {
+//     const { products, user_addresses_id } = req.body;
+//     const user_id = req.session.user?.id;
+
+//     if (!user_id || !products || !user_addresses_id) {
+//         return res.status(400).json({ error: "ข้อมูลไม่ครบถ้วน" });
+//     }
+
+//     // ดึงข้อมูลที่อยู่
+//     const [addrRows] = await db.promise().query(
+//         `SELECT * FROM user_addresses WHERE user_addresses_id = ?`,
+//         [user_addresses_id]
+//     );
+//     if (!addrRows.length) return res.status(400).json({ error: "ที่อยู่ไม่ถูกต้อง" });
+
+//     let parsedProducts;
+//     try {
+//         parsedProducts = JSON.parse(products);
+//     } catch (err) {
+//         return res.status(400).json({ error: "รูปแบบสินค้าไม่ถูกต้อง" });
+//     }
+
+//     if (!Array.isArray(parsedProducts) || parsedProducts.length === 0) {
+//         return res.status(400).json({ error: "ไม่มีรายการสินค้า" });
+//     }
+
+//     const isOfficial = parsedProducts.some(p => p.is_official === 1);
+
+//     let sellerId = null;
+//     let paymentMethodId = null;
+
+//     try {
+//         if (isOfficial) {
+//             // กรณีสินค้าของสมาคม
+//             const [pmRows] = await db.promise().query(
+//                 `SELECT payment_method_id FROM payment_methods WHERE is_official = "1" LIMIT 1`
+//             );
+//             if (!pmRows.length) return res.status(400).json({ error: "ไม่พบบัญชีสมาคม" });
+//             paymentMethodId = pmRows[0].payment_method_id;
+//         } else {
+//             // กรณีสินค้าผู้ขายทั่วไป
+//             const sellerIds = [...new Set(parsedProducts.map(p => p.user_id))];
+//             if (sellerIds.length !== 1)
+//                 return res.status(400).json({ error: "เลือกสินค้าได้จากผู้ขายเดียวเท่านั้น" });
+
+//             sellerId = sellerIds[0];
+
+//             const [pmRows] = await db.promise().query(
+//                 `SELECT payment_method_id FROM products WHERE user_id = ? LIMIT 1`,
+//                 [sellerId]
+//             );
+//             if (!pmRows.length) return res.status(400).json({ error: "ไม่พบ payment method ของผู้ขาย" });
+//             paymentMethodId = pmRows[0].payment_method_id;
+//         }
+
+//         // คำนวณยอดรวม
+//         const total_amount = parsedProducts.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+//         const total_quantity = parsedProducts.reduce((sum, item) => sum + item.quantity, 0);
+//         const slipPath = req.file ? req.file.filename : null;
+
+//         // บันทึกคำสั่งซื้อ
+//         const [orderResult] = await db.promise().query(
+//             `INSERT INTO orders (
+//                 user_id, seller_id, payment_status, quantity, order_status, total_amount, user_addresses_id, order_date
+//             )
+//             VALUES (?, ?, 'pending', ?, 'pending_verification', ?, ?, NOW())`,
+//             [user_id, sellerId, total_quantity, total_amount, user_addresses_id]
+//         );
+
+//         const orderId = orderResult.insertId;
+
+//         // เพิ่มข้อมูลการชำระเงิน
+//         const [paymentResult] = await db.promise().query(
+//             `INSERT INTO payment (order_id, amount, payment_status, payment_date, created_at, payment_method_id, slip_path)
+//             VALUES (?, ?, 'pending', NOW(), NOW(), ?, ?)`,
+//             [orderId, total_amount, paymentMethodId, slipPath]
+//         );
+
+//         const paymentId = paymentResult.insertId;
+//         await db.promise().query(`UPDATE orders SET payment_id = ? WHERE order_id = ?`, [paymentId, orderId]);
+
+//         // เพิ่มรายละเอียดสินค้า
+//         const insertItems = parsedProducts.map(p =>
+//             db.promise().query(
+//                 `INSERT INTO order_detail (order_id, product_id, quantity, total)
+//                 VALUES (?, ?, ?, ?)`,
+//                 [orderId, p.product_id, p.quantity, p.price * p.quantity]
+//             )
+//         );
+//         await Promise.all(insertItems);
+
+//         // ลบออกจากตะกร้า
+//         const productIds = parsedProducts.map(p => p.product_id);
+//         await db.promise().query(
+//             `DELETE FROM cart WHERE user_id = ? AND product_id IN (${productIds.map(() => '?').join(',')})`,
+//             [user_id, ...productIds]
+//         );
+
+//         await notifyAdminNewOrder(orderId, user_id);
+
+//         res.status(200).json({ message: "สั่งซื้อสำเร็จ", orderId });
+
+//     } catch (error) {
+//         console.error("Checkout error:", error);
+//         res.status(500).json({ error: "เกิดข้อผิดพลาดในการสั่งซื้อ" });
+//     }
+// });
+
+// ดึงข้อมูลบัญชีธนาคารของ seller หรือสินค้าทางการ
+// ดึงข้อมูลบัญชีธนาคาร (รองรับทั้งสมาคมและผู้ขาย)
+route.get('/bank-info', async (req, res) => {
+    try {
+        const { isOfficial, sellerId } = req.query;
+
+        let rows;
+
+        if (isOfficial === "true") {
+            // กรณีสินค้าของสมาคม
+            [rows] = await db.promise().query(`
+                SELECT 
+                    account_name, 
+                    bank_name, 
+                    account_number, 
+                    promptpay_number
+                FROM payment_methods
+                WHERE is_official = 1
+                LIMIT 1
+            `);
+        } else if (sellerId && !isNaN(Number(sellerId))) {
+            // กรณีสินค้าผู้ขายทั่วไป
+            [rows] = await db.promise().query(`
+                SELECT 
+                    pm.account_name, 
+                    pm.bank_name, 
+                    pm.account_number, 
+                    pm.promptpay_number
+                FROM payment_methods pm
+                JOIN products p ON p.payment_method_id = pm.payment_method_id
+                WHERE p.user_id = ?
+                LIMIT 1
+            `, [sellerId]);
+        } else {
+           
+            // ถ้าไม่มี params ให้ดึงข้อมูลสมาคม (official) เป็น default
+            [rows] = await db.promise().query(`
+                SELECT 
+                    account_name, 
+                    bank_name, 
+                    account_number, 
+                    promptpay_number
+                FROM payment_methods
+                WHERE is_official = 1
+                LIMIT 1
+            `);
+        }
+
+        if (!rows || rows.length === 0) {
+            // ถ้าไม่พบข้อมูลจริงๆ ใน DB ถึงจะคืน default
+            return res.status(200).json({
+                success: true,
+                data: {
+                    account_name: "-",
+                    bank_name: "-",
+                    account_number: "-",
+                    promptpay_number: null
+                }
+            });
+        }
+
+        // ส่งข้อมูลบัญชีกลับ
+        res.json({
+            success: true,
+            data: rows[0]
+        });
+
+    } catch (error) {
+        console.error("Error fetching bank info:", error);
+        res.status(500).json({
+            success: false,
+            message: "เกิดข้อผิดพลาดจากเซิร์ฟเวอร์"
+        });
+    }
+});
+
+
+
 // ฟังก์ชันแจ้งเตือนแอดมินและผู้ขายเมื่อมีการสั่งซื้อใหม่
 async function notifyAdminNewOrder(orderId, buyerId) {
     const insertNoti = `
@@ -1310,18 +1638,50 @@ route.get('/order_history', async (req, res) => {
 });
 
 // สร้าคิวอาร์โค้ดสำหรับ PromptPay
+// route.post('/generateQR', async (req, res) => {
+//     const { amount, numberPromtpay } = req.body;
+
+//     console.log("REQ BODY:", req.body); // ตรวจสอบข้อมูลที่ส่งมา
+
+//     if (!numberPromtpay || isNaN(amount)) {
+//         return res.status(400).json({ RespCode: 400, RespMessage: 'ข้อมูลไม่ครบถ้วน' });
+//     }
+
+//     try {
+//         const payload = generatePayload(numberPromtpay, { amount: parseFloat(amount) });
+
+//         const qrUrl = await QRCode.toDataURL(payload);
+
+//         return res.status(200).json({
+//             RespCode: 200,
+//             RespMessage: 'QR Code generated successfully',
+//             Result: qrUrl
+//         });
+//     } catch (err) {
+//         console.error('Error generating QR code:', err);
+//         return res.status(500).json({
+//             RespCode: 500,
+//             RespMessage: 'Internal Server Error',
+//             error: err.toString()
+//         });
+//     }
+// });
+
 route.post('/generateQR', async (req, res) => {
     const { amount, numberPromtpay } = req.body;
+    console.log("REQ BODY:", req.body);
 
-    console.log("REQ BODY:", req.body); // ตรวจสอบข้อมูลที่ส่งมา
-
-    if (!numberPromtpay || isNaN(amount)) {
-        return res.status(400).json({ RespCode: 400, RespMessage: 'ข้อมูลไม่ครบถ้วน' });
+    // ถ้าไม่มี promptpay ให้ตอบกลับแบบไม่ error
+    if (!numberPromtpay) {
+        return res.status(200).json({
+            RespCode: 200,
+            RespMessage: 'No PromptPay provided. Use bank transfer instead.',
+            Result: null
+        });
     }
 
     try {
         const payload = generatePayload(numberPromtpay, { amount: parseFloat(amount) });
-
         const qrUrl = await QRCode.toDataURL(payload);
 
         return res.status(200).json({
@@ -1338,5 +1698,6 @@ route.post('/generateQR', async (req, res) => {
         });
     }
 });
+
 
 module.exports = route;

@@ -16,13 +16,13 @@ cron.schedule('0 8 * * *', () => {
   `;
 
   db.query(query, [today], (err, results) => {
-    if (err) return console.error('❌ ดึงรายชื่อวันเกิดล้มเหลว:', err);
+    if (err) return console.error('ดึงรายชื่อวันเกิดล้มเหลว:', err);
 
     results.forEach((user) => {
       sendCustomEmail(user.email, user.fullName, 'birthday');
     });
 
-    console.log(`🎉 ส่งอีเมลอวยพรแล้ว ${results.length} คน`);
+    console.log(`ส่งอีเมลอวยพรแล้ว ${results.length} คน`);
   });
 });
 
