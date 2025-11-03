@@ -1,13 +1,18 @@
 const express = require("express");
-const route = express.Router();
+const router = express.Router();
 const multer = require('multer');
 const path = require('path');
-const db = require('../db'); 
+const db = require('../db');
+const moment = require('moment');
+var { LoggedIn, checkActiveUser } = require('../middlewares/auth');
+const { logManage, logDonation } = require('../logUserAction');
+const { log } = require("console");
+const ORDER_STATUS = require("../orderStatus");
 
 // ตั้งค่า Multer สำหรับอัปโหลดไฟล์
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
-        cb(null, 'uploads/'); // กำหนดโฟลเดอร์เก็บไฟล์
+        cb(null, 'uploads/');
     },
     filename: function (req, file, cb) {
         cb(null, Date.now() + path.extname(file.originalname)); // ตั้งชื่อไฟล์ไม่ให้ซ้ำกัน
@@ -15,7 +20,8 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
-route.get('/', (req, res) => {
+// ส่วนของdonate 
+router.get('/donate', (req, res) => {
     const query = 'SELECT * FROM donationproject';
 
     db.query(query, (err, results) => {
@@ -27,9 +33,43 @@ route.get('/', (req, res) => {
     });
 });
 
-route.get('/donatedetail/:id', (req, res) => {
+// ดึงรายละเอียดโครงการ
+// router.get('/donatedetail/:id', (req, res) => {
+//     const projectId = req.params.id;
+//     const query = 'SELECT * FROM donationproject WHERE project_id = ?';
+
+//     db.query(query, [projectId], (err, results) => {
+//         if (err) {
+//             console.error('Error fetching project details:', err);
+//             return res.status(500).json({ error: 'Error fetching project details' });
+//         }
+//         if (results.length === 0) {
+//             return res.status(404).json({ error: 'Project not found' });
+//         }
+//         res.status(200).json(results[0]);
+//     });
+// });
+
+// ดึงรายละเอียดโครงการและข้อมูลธนาคาร
+router.get('/donatedetail/:id', (req, res) => {
     const projectId = req.params.id;
-    const query = 'SELECT * FROM donationproject WHERE project_id = ?';
+
+    const query = `
+        SELECT 
+            dp.*, 
+            pm.method_name,
+            pm.bank_name, 
+            pm.account_name, 
+            pm.account_number, 
+            pm.promptpay_number,
+            pm.is_official
+        FROM 
+            donationproject dp
+        JOIN 
+            payment_methods pm ON dp.payment_method_id = pm.payment_method_id
+        WHERE 
+            dp.project_id = ?
+    `;
 
     db.query(query, [projectId], (err, results) => {
         if (err) {
@@ -39,82 +79,650 @@ route.get('/donatedetail/:id', (req, res) => {
         if (results.length === 0) {
             return res.status(404).json({ error: 'Project not found' });
         }
-        res.status(200).json(results[0]); 
+
+        res.status(200).json(results[0]);
     });
 });
 
-route.post('/donateRequest', upload.single('image'), (req, res) => {
-    const { projectName, description, targetAmount, startDate, endDate, donationType, currentAmount, bankName, accountNumber, numberPromtpay, roleId } = req.body;
 
-    if (roleId !== '1') {
+// อนุมัติการบริจาคให้ตั้งโครงการ
+router.put('/approveDonate/:id', (req, res) => {
+    const projectId = req.params.id;
+    const query = 'UPDATE donationproject SET status = "1" WHERE project_id = ?';
+    db.query(query, [projectId], (err, result) => {
+        if (err) {
+            console.error('Error updating project status:', err);
+            return res.status(500).json({ error: 'Database error' });
+        }
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'Project not found or already approved' });
+        }
+        console.log(`Project ${projectId} approved successfully`);
+        res.status(200).json({
+            message: 'Project approved successfully',
+            projectId: projectId
+        });
+    });
+});
+
+// อนุมัติการบริจาคให้ตั้งโครงการ
+router.put('/approveDonate/:id', (req, res) => {
+    const projectId = req.params.id;
+
+    // อัปเดตสถานะโครงการ
+    const query = 'UPDATE donationproject SET status = "1" WHERE project_id = ?';
+    db.query(query, [projectId], (err, result) => {
+        if (err) {
+            console.error('Error updating project status:', err);
+            return res.status(500).json({ error: 'Database error' });
+        }
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'Project not found or already approved' });
+        }
+
+        console.log(`Project ${projectId} approved successfully`);
+
+        // ดึง user_id ของผู้ตั้งโครงการ
+        const getUserQuery = 'SELECT user_id, project_name FROM donationproject WHERE project_id = ?';
+        db.query(getUserQuery, [projectId], (userErr, userResult) => {
+            if (userErr) {
+                console.error('Error fetching project owner:', userErr);
+                return res.status(500).json({ error: 'Database error' });
+            }
+
+            if (userResult.length === 0) {
+                return res.status(404).json({ error: 'Project not found after update' });
+            }
+
+            const userId = userResult[0].user_id;
+            const projectName = userResult[0].project_name;
+
+            const notifyQuery = `
+                INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
+                VALUES (?, 'อนุมัติโครงการ', ?, ?, NOW(), 'ยังไม่อ่าน')
+            `;
+            const notifyValues = [
+                userId,
+                `โครงการ "${projectName}" ของคุณได้รับการอนุมัติแล้ว`,
+                projectId
+            ];
+
+            db.query(notifyQuery, notifyValues, (notifyErr) => {
+                if (notifyErr) {
+                    console.error("Error inserting notification:", notifyErr);
+                }
+            });
+
+            // ส่ง response 
+            res.status(200).json({
+                message: 'Project approved and user notified successfully',
+                projectId: projectId
+            });
+        });
+    });
+});
+
+// ลบโครงการบริจาค
+router.delete('/donate/:id', (req, res) => {
+    const projectId = req.params.id;
+    const query = 'DELETE FROM donationproject WHERE project_id = ?';
+
+    db.query(query, [projectId], (err, results) => {
+        if (err) {
+            console.error('Error deleting project:', err);
+            return res.status(500).json({ error: 'Error deleting project' });
+        }
+
+        if (results.affectedRows === 0) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+
+        res.status(200).json({ message: 'Project deleted successfully' });
+    });
+});
+
+// เพิ่มโครงการบริจาค
+router.post('/donateRequest', upload.single('image'), (req, res) => {
+    const {
+        userId, projectName, description, targetAmount, startDate, endDate,
+        donationType, currentAmount, bankName, accountName, accountNumber, numberPromtpay,
+        userRole, typeThing, quantity_things, forThings, paymentMethod
+    } = req.body;
+
+    if (userRole !== "1") {
+        console.log("Unauthorized access attempt by user role:", userRole);
         return res.status(403).json({ error: 'Unauthorized access, only admins can add donation projects' });
     }
-
     if (!req.file) {
         return res.status(400).json({ error: 'Image is required' });
     }
 
-    const image = req.file.filename; 
+    const image = req.file.filename;
+    const currentAmountValue = currentAmount ? Number(currentAmount) : 0;
 
-    const query = 
-    `INSERT INTO donationproject 
-    (project_name, description, start_date, end_date, donation_type, image_path, 
-    target_amount, current_amount, bank_name, account_number, number_promtpay, role_id) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    const paymentQuery = `
+        INSERT INTO payment_methods (method_name, bank_name, account_name, account_number, promptpay_number, is_official)
+        VALUES (?, ?, ?, ?, ?,?)
     `;
-
-    const values = [
-        projectName,
-        description,
-        startDate,
-        endDate,
-        donationType,
-        image,
-        targetAmount,
-        currentAmount,
-        bankName,
-        accountNumber,
-        numberPromtpay,
-        '1'  
+    const paymentValues = [
+        paymentMethod || '',
+        bankName || null,
+        accountName || null,
+        accountNumber || null,
+        numberPromtpay || null,
+        1
     ];
 
-    db.query(query, values, (err, result) => {
+    db.query(paymentQuery, paymentValues, (err, paymentResult) => {
         if (err) {
-            console.error('Error inserting donation project:', err);
-            return res.status(500).json({ error: 'Error inserting donation project' });
+            console.error('Error inserting payment method:', err);
+            return res.status(500).json({ error: 'Error inserting payment method' });
         }
-        res.status(201).json({ message: 'Donation project added successfully' });
+
+        const paymentMethodId = paymentResult.insertId;
+
+        const projectQuery = `
+            INSERT INTO donationproject (
+                user_id, project_name, description, start_date, end_date,
+                donation_type, image_path, target_amount, current_amount,
+                type_things, quantity_things, for_things, status, payment_method_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `;
+
+        const projectValues = [
+            userId,
+            projectName,
+            description,
+            startDate,
+            endDate,
+            donationType,
+            image,
+            targetAmount || 0,
+            currentAmountValue,
+            typeThing || null,
+            quantity_things || null,
+            forThings || null,
+            1,
+            paymentMethodId
+        ];
+
+        db.query(projectQuery, projectValues, (err, result) => {
+            if (err) {
+                console.error('Error inserting donation project:', err);
+                return res.status(500).json({ error: 'Error inserting donation project' });
+            }
+
+            res.status(201).json({
+                message: 'Donation project added successfully',
+                projectId: result.insertId,
+                paymentMethodId: paymentMethodId
+            });
+        });
     });
 });
 
-route.delete('/:id', (req, res) => {
+// แก้ไขโครงการบริจาค
+router.put('/editDonate/:id', upload.single('image'), (req, res) => {
     const projectId = req.params.id;
-    if (!projectId) {
-        return res.status(400).json({ error: 'Project ID is required' });
-    }
-    const query = 'DELETE FROM donationproject WHERE project_id = ?';
-    db.query(query, [projectId], (err, result) => {
+    const {
+        project_name,
+        description,
+        target_amount,
+        start_date,
+        end_date,
+        donation_type,
+        current_amount,
+        payment_method_id 
+    } = req.body;
+
+    db.query('SELECT status, start_date, end_date FROM donationproject WHERE project_id = ?', [projectId], (err, result) => {
         if (err) {
-            console.error('Error deleting project:', err);
-            return res.status(500).json({ error: 'Database error' });
+            console.error('Error fetching project status:', err);
+            return res.status(500).json({ success: false, error: 'Database error' });
+        }
+
+        if (result.length === 0) {
+            return res.status(404).json({ success: false, error: 'Project not found' });
+        }
+
+        const oldStatus = parseInt(result[0].status);
+        let newStatus = oldStatus;
+
+        // ตรวจสอบโครงการสิ้นสุด
+        if (oldStatus === 3) {
+            if (start_date !== result[0].start_date || end_date !== result[0].end_date) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'โครงการสิ้นสุดแล้ว ไม่สามารถแก้ไขได้'
+                });
+            }
+        } else {
+            const now = moment();
+            const startDate = moment(start_date);
+            const endDate = moment(end_date);
+
+            if (now.isBefore(startDate)) newStatus = 0;
+            else if (now.isBetween(startDate, endDate, 'day', '[]')) newStatus = 1;
+            else newStatus = 3;
+        }
+
+        // อัปเดต donationproject
+        let query = `
+      UPDATE donationproject
+      SET project_name = ?, description = ?, target_amount = ?, start_date = ?, end_date = ?,
+          donation_type = ?, current_amount = ?, payment_method_id = ?, status = ?
+      ${req.file ? ', image_path = ?' : ''}
+      WHERE project_id = ?
+    `;
+
+        const values = req.file
+            ? [project_name, description, target_amount, start_date, end_date, donation_type, current_amount || 0, payment_method_id, newStatus, req.file.filename, projectId]
+            : [project_name, description, target_amount, start_date, end_date, donation_type, current_amount || 0, payment_method_id, newStatus, projectId];
+
+        db.query(query, values, (err, result) => {
+            if (err) {
+                console.error('Error updating donation project:', err);
+                return res.status(500).json({ success: false, error: 'Error updating donation project' });
+            }
+
+            if (result.affectedRows === 0) {
+                return res.status(404).json({ success: false, error: 'Project not found' });
+            }
+
+            res.status(200).json({
+                success: true,
+                message: 'Donation project updated successfully',
+                projectId: projectId,
+                imageUpdated: !!req.file,
+                status: newStatus
+            });
+        });
+    });
+});
+
+
+
+// [ที่เพิ่ม] บันทึกการบริจาคแบบ Walk-in
+router.post("/donations/walk-in", (req, res) => {
+    const {
+        donor_name,
+        donor_phone,
+        donor_email,
+        donor_address,
+        project_id,
+        amount,
+        purpose,
+        note,
+        payment_method,
+        payment_status,
+        donation_type,
+        taxReceiptRequired,
+        taxId,
+        tax_number,
+        name,
+        email,
+        phone,
+        type_tax,
+    } = req.body;
+
+    if (!donor_name || !amount || !purpose) {
+        return res.status(400).json({ message: "กรุณากรอกข้อมูลให้ครบถ้วน" });
+    }
+
+    let finalTaxId = null;
+    let taxStatus = "none";
+
+    const useTaxBool =
+        taxReceiptRequired === true ||
+        taxReceiptRequired === "1" ||
+        taxReceiptRequired === 1;
+
+    if (useTaxBool) {
+        taxStatus = "requested";
+
+        if (taxId) {
+            db.query(
+                `SELECT tax_id FROM tax_addresses WHERE tax_id = ? AND deleted_at IS NULL`,
+                [taxId],
+                (err, results) => {
+                    if (err) return res.status(500).json({ message: "เกิดข้อผิดพลาด" });
+                    if (results.length === 0)
+                        return res.status(400).json({ message: "ไม่พบข้อมูลใบกำกับภาษีที่เลือก" });
+
+                    finalTaxId = results[0].tax_id;
+                    insertDonation();
+                }
+            );
+        } else {
+            if (!name || !tax_number) {
+                return res
+                    .status(400)
+                    .json({ message: "กรุณากรอกข้อมูลใบกำกับภาษีให้ครบถ้วน" });
+            }
+
+            db.query(
+                `INSERT INTO tax_addresses (user_id, name, tax_number, email, phone, type_tax)
+         VALUES (NULL, ?, ?, ?, ?, ?)`,
+                [name, tax_number, email || donor_email || null, phone || donor_phone || null, type_tax || "individual"],
+                (err, insertTaxResult) => {
+                    if (err) return res.status(500).json({ message: "เกิดข้อผิดพลาด" });
+
+                    finalTaxId = insertTaxResult.insertId;
+                    insertDonation();
+                }
+            );
+        }
+    } else {
+        insertDonation();
+    }
+
+    function insertDonation() {
+        const insertDonationQuery = `
+      INSERT INTO donations 
+      (project_id, user_id, tax_id, use_tax, donor_name, donor_phone, donor_email, donor_address,
+       amount, purpose, note, payment_method, payment_status, donation_type, tax_status, created_at)
+      VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+    `;
+
+        db.query(
+            insertDonationQuery,
+            [
+                project_id || null,
+                finalTaxId,
+                useTaxBool ? 1 : 0,
+                donor_name,
+                donor_phone || null,
+                donor_email || null,
+                donor_address || null,
+                amount,
+                purpose,
+                note || null,
+                payment_method || "cash",
+                payment_status || "paid",
+                donation_type || "walk_in",
+                taxStatus,
+            ],
+            (err, result) => {
+                if (err) {
+                    console.error("Walk-in Donation Error:", err);
+                    return res.status(500).json({ message: "เกิดข้อผิดพลาดภายในเซิร์ฟเวอร์" });
+                }
+
+                console.log("บันทึก Walk-in Donation สำเร็จ:", result.insertId);
+                return res.status(200).json({
+                    success: true,
+                    message: "บันทึกการบริจาค Walk-in สำเร็จ",
+                    donationId: result.insertId,
+                });
+            }
+        );
+    }
+});
+
+// ดึงโครงการบริจาคที่เปิดอยู่[ที่เพิ่ม]
+router.get('/projects/active', (req, res) => {
+    const query = 'SELECT * FROM donationproject WHERE status = "1"';
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error('Database query failed:', err);
+            return res.status(500).json({ error: 'Database query failed' });
+        }
+        res.json(results);
+    });
+});
+
+// ตรวจสอบการชำระเงินบริจาคทั้งหมด[ที่เพิ่ม]
+router.get('/donate-lists', (req, res) => {
+    const query = `
+        SELECT d.*,
+            dp.project_name,
+            p.full_name ,
+            p.email,
+            p.phone,
+            ta.*,
+            CONCAT('DONATE-', d.donation_id) AS order_number
+        FROM donations d
+        LEFT JOIN donationproject dp ON d.project_id = dp.project_id
+        LEFT JOIN profiles p ON d.user_id = p.user_id
+        LEFT JOIN tax_addresses ta ON d.tax_id = ta.tax_id
+        WHERE d.deleted_at IS NULL
+        ORDER BY d.created_at DESC
+    `;
+
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error('Database query failed:', err);
+            return res.status(500).json({ error: 'Database query failed' });
+        }
+        res.json(results);
+    });
+});
+
+// ตรวจสอบการชำระเงินบริจาคทั้งหมด
+router.get('/check-payment-donate', (req, res) => {
+    const query = `
+        SELECT 
+            d.donation_id,
+            d.amount,
+            d.created_at AS start_date,
+            d.payment_status,
+            d.slip,
+            dp.project_name,
+            pm.account_name,
+            pm.bank_name,
+            pm.account_number,
+            pm.promptpay_number,
+            p.full_name AS donor_name,
+            CONCAT('DONATE-', d.donation_id) AS order_number
+        FROM donations d
+        LEFT JOIN donationproject dp ON d.project_id = dp.project_id
+        LEFT JOIN payment_methods pm ON dp.payment_method_id = pm.payment_method_id
+        LEFT JOIN profiles p ON d.user_id = p.user_id
+        WHERE d.deleted_at IS NULL 
+          AND d.payment_status = 'pending'
+        ORDER BY d.created_at DESC
+    `;
+
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error('Database query failed:', err);
+            return res.status(500).json({ error: 'Database query failed' });
+        }
+        res.json(results);
+    });
+});
+
+
+
+// ดึงรายละเอียดการชำระเงิน
+router.get('/check-payment-donate/:id', (req, res) => {
+    const donationId = req.params.id;
+
+    const query = `
+        SELECT 
+            d.donation_id,
+            d.amount,
+            d.created_at,
+            d.payment_status,
+            d.slip AS proof_image,
+            p.full_name AS donor_name,
+            dp.project_name,
+            pm.account_name,
+            pm.bank_name,
+            pm.account_number,
+            pm.promptpay_number,
+            CONCAT('DONATE-', d.donation_id) AS order_number
+        FROM donations d
+        LEFT JOIN donationproject dp ON d.project_id = dp.project_id
+        LEFT JOIN payment_methods pm ON dp.payment_method_id = pm.payment_method_id
+        LEFT JOIN profiles p ON d.user_id = p.user_id
+        WHERE d.donation_id = ?
+    `;
+
+    db.query(query, [donationId], (err, results) => {
+        if (err) {
+            console.error("Database error:", err);
+            return res.status(500).json({ message: "เกิดข้อผิดพลาดในการดึงข้อมูล" });
+        }
+
+        if (results.length === 0) {
+            return res.status(404).json({ message: "ไม่พบข้อมูลการบริจาคนี้" });
+        }
+
+        res.json(results[0]);
+    });
+});
+
+
+// อนุมัติการชำระเงินและอัปเดตยอดเงินโครงการ
+router.put('/check-payment-donate/approve/:donationId', (req, res) => {
+    const donationId = req.params.donationId;
+    const userId = req.body.user_id;
+
+    const getDonationSql = `
+        SELECT amount, project_id, user_id 
+        FROM donations 
+        WHERE donation_id = ? AND deleted_at IS NULL
+    `;
+
+    db.query(getDonationSql, [donationId], (err, donationResult) => {
+        if (err) {
+            console.error('Failed to fetch donation:', err);
+            return res.status(500).json({ success: false, message: 'Failed to fetch donation' });
+        }
+        if (!donationResult.length) {
+            return res.status(404).json({ success: false, message: 'Donation not found' });
+        }
+
+        const donation = donationResult[0];
+
+        // อัปเดตจำนวนเงินในโครงการ
+        const updateProjectSql = `
+            UPDATE donationproject 
+            SET current_amount = current_amount + ? 
+            WHERE project_id = ?
+        `;
+
+        db.query(updateProjectSql, [donation.amount, donation.project_id], (err2) => {
+            if (err2) {
+                console.error('Failed to update project amount:', err2);
+                return res.status(500).json({ success: false, message: 'Failed to update project amount' });
+            }
+
+            // อัปเดตสถานะการชำระเงินของ donation
+            const updateDonationSql = `
+                UPDATE donations 
+                SET payment_status = 'paid' 
+                WHERE donation_id = ?
+            `;
+
+            db.query(updateDonationSql, [donationId], (err3) => {
+                if (err3) {
+                    console.error('Failed to approve payment:', err3);
+                    return res.status(500).json({ success: false, message: 'Failed to approve payment' });
+                }
+
+                // log การอนุมัติ
+                logDonation(donationId, userId, "แอดมินยืนยันการชำระเงิน");
+
+                // ส่งแจ้งเตือนให้ผู้บริจาค
+                const insertNotificationSql = `
+                    INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
+                    VALUES (?, 'payment-donate', ?, ?, NOW(), 'ยังไม่อ่าน')
+                `;
+
+                const message = 'การบริจาคของคุณได้รับการยืนยันเรียบร้อยแล้ว';
+
+                db.query(insertNotificationSql, [donation.user_id, message, donationId], (err4) => {
+                    if (err4) {
+                        console.error('Failed to insert notification:', err4);
+                        // ส่ง response เมื่อการอนุมัติเสร็จ
+                        return res.json({
+                            success: true,
+                            message: 'Payment approved and project amount updated successfully, but notification failed'
+                        });
+                    }
+
+                    console.log('Notification sent successfully to user:', donation.user_id);
+                    res.json({
+                        success: true,
+                        message: 'Payment approved, project amount updated, and notification sent successfully'
+                    });
+                });
+            });
+        });
+    });
+});
+
+
+// ปฏิเสธการชำระเงิน
+router.put('/check-payment-donate/reject/:donationId', (req, res) => {
+    const { donationId } = req.params;
+    const { reject_reason, admin_id } = req.body;
+
+    // อัปเดตสถานะโครงการ
+    const sql = `
+        UPDATE donations
+        SET payment_status = 'failed',
+            reject_reason = ?
+        WHERE donation_id = ?
+    `;
+
+    db.query(sql, [reject_reason, donationId], (err, result) => {
+        if (err) {
+            console.error('Failed to reject payment:', err);
+            return res.status(500).json({ success: false, message: 'Failed to reject payment' });
         }
         if (result.affectedRows === 0) {
-            return res.status(404).json({ error: 'Project not found' });
+            return res.status(404).json({ success: false, message: 'Donation not found' });
         }
-        res.status(200).json({ message: 'Project permanently deleted' });
+
+        // ดึง user_id ที่อัปเดต
+        const getUserSql = `SELECT user_id FROM donations WHERE donation_id = ?`;
+        db.query(getUserSql, [donationId], (err2, rows) => {
+            if (err2 || rows.length === 0) {
+                console.error('Failed to get user_id:', err2);
+                return res.json({ success: true, message: 'Payment rejected but user not found', updatedStatus: 'failed' });
+            }
+
+            const userId = rows[0].user_id;
+
+            // log การปฏิเสธ
+            logDonation(admin_id, donationId, "แอดมินปฏิเสธการชำระเงิน");
+
+            const message = 'การบริจาคโดนปฏิเสธ กรุณาอัปโหลดสลิปใหม่';
+            const insertNotificationSql = `
+                INSERT INTO notifications (user_id, type, message, related_id, send_date)
+                VALUES (?, 'reject-donate', ?, ?, NOW())
+                ON DUPLICATE KEY UPDATE 
+                    message = VALUES(message),
+                    send_date = NOW(),
+                    status = 'ยังไม่อ่าน';
+            `;
+
+            db.query(insertNotificationSql, [userId, message, donationId], (err3) => {
+                if (err3) {
+                    console.error('Failed to insert notification:', err3);
+                    return res.json({ success: true, message: 'Payment rejected but notification failed', updatedStatus: 'failed' });
+                }
+
+                res.json({ success: true, message: 'Payment rejected successfully', updatedStatus: 'failed' });
+            });
+        });
     });
 });
 
 
-// เส้นทางที่ถูกต้องต้องมีการตั้งค่าที่ :id เช่น /admin/44
-route.put('/:id', (req, res) => {
+// เปลี่ยนสถานะโครงการบริจาค
+router.put('/:id', (req, res) => {
     const projectId = req.params.id;
     if (!projectId) {
         return res.status(400).json({ error: 'Project ID is required' });
     }
 
     const query = 'UPDATE donationproject SET status = "1" WHERE project_id = ?';
-    
+
     db.query(query, [projectId], (err, result) => {
         if (err) {
             console.error('Error updating project status:', err);
@@ -129,55 +737,88 @@ route.put('/:id', (req, res) => {
     });
 });
 
-route.post('/addsouvenir', upload.single('image'), (req, res) => {
-    const { productName, description, price, stock } = req.body;
-    const user_id = req.body.user_id;
+
+// เพิ่มสินค้าที่ระลึก
+router.post('/addsouvenir', upload.single('image'), (req, res) => {
+    const { productName, description, price, paymentMethod, bankName, accountNumber, accountName, promptpayNumber } = req.body;
+    const user_id = req.session.user?.id;
     const image = req.file ? req.file.filename : null;
-    console.log(user_id);
+
     if (!image) {
         return res.status(400).json({ error: 'Image is required' });
     }
 
-    if (!productName || !description || !price || !stock) {
+    if (!productName || !description || !price || !paymentMethod || !bankName || !accountNumber || !accountName) {
         return res.status(400).json({ error: 'All fields are required' });
     }
 
-    const query = `
-    INSERT INTO products 
-    (product_name, description, image, price, stock, user_id,status) 
-    VALUES (?, ?, ?, ?, ?, ?,?)
+    const queryPayment = `
+    INSERT INTO payment_methods 
+    (method_name, bank_name, account_name, account_number, promptpay_number) 
+    VALUES (?, ?, ?, ?, ?)
     `;
 
-    const values = [
-        productName,
-        description,
-        image,
-        price,
-        stock,
-        user_id,
-        "1"
+    const valuesPayment = [
+        paymentMethod,
+        bankName,
+        accountName,
+        accountNumber,
+        promptpayNumber
     ];
 
-    db.query(query, values, (err, result) => {
+    db.query(queryPayment, valuesPayment, (err, result) => {
         if (err) {
-            console.error('Error inserting product:', err);
-            return res.status(500).json({ error: 'Error inserting product' });
+            console.error('Error inserting payment method:', err);
+            return res.status(500).json({ error: 'Error inserting payment method' });
         }
 
-        res.status(200).json({ message: 'Product added successfully' });
+        const payment_method_id = result.insertId;
+
+        const queryProduct = `
+        INSERT INTO products 
+        (product_name, description, image, price, user_id, status, payment_method_id) 
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        `;
+
+        const valuesProduct = [
+            productName,
+            description,
+            image,
+            price,
+            user_id,
+            "1",
+            payment_method_id,
+        ];
+
+        db.query(queryProduct, valuesProduct, (err, result) => {
+            if (err) {
+                console.error('Error inserting product:', err);
+                return res.status(500).json({ error: 'Error inserting product' });
+            }
+            res.status(200).json({ message: 'Product and payment method added successfully' });
+        });
     });
 });
 
-
-// สินค้าาาาาาาาาา
-route.get('/souvenir', (req, res) => {
-    const query = 
-        `SELECT 
-        products.*, role.role_id
-        FROM products 
-        JOIN users ON products.user_id = users.user_id
-        JOIN role ON users.role_id = role.role_id
+// ขายของที่ระลึก
+router.get('/souvenir', (req, res) => {
+    const query = `
+        SELECT 
+            p.*,
+            r.role_id,
+            pr.full_name,
+            COALESCE(SUM(ps.quantity), 0) AS total_quantity,
+            COALESCE(SUM(ps.sold), 0) AS total_sold,
+            COALESCE(SUM(ps.reserved), 0) AS total_reserved,
+            (COALESCE(SUM(ps.quantity), 0) - COALESCE(SUM(ps.sold), 0) - COALESCE(SUM(ps.reserved), 0)) AS stock_remain
+        FROM products p
+        LEFT JOIN users u ON p.user_id = u.user_id
+        LEFT JOIN role r ON u.role_id = r.role_id
+        LEFT JOIN profiles pr ON u.user_id = pr.user_id
+        LEFT JOIN product_slots ps ON p.product_id = ps.product_id
+        GROUP BY p.product_id
     `;
+
     db.query(query, (err, results) => {
         if (err) {
             console.error('Database query failed:', err);
@@ -187,15 +828,15 @@ route.get('/souvenir', (req, res) => {
     });
 });
 
-// เปลี่ยนสถานะสินค้าให้เป็นสถานะ 1จาก 0
-route.put('/updateSouvenir/:id', (req, res) => {
-    const productId = req.params.id; // รับค่า id จาก URL parameter
+// เปลี่ยนสถานะสินค้าให้เป็นสถานะ 1 จาก 0
+router.put('/updateSouvenir/:id', (req, res) => {
+    const productId = req.params.id;
     if (!productId) {
         return res.status(400).json({ error: 'Product ID is required' });
     }
 
     const query = 'UPDATE products SET status = "1" WHERE product_id = ?';
-    
+
     db.query(query, [productId], (err, result) => {
         if (err) {
             console.error('Error updating product status:', err);
@@ -210,31 +851,185 @@ route.put('/updateSouvenir/:id', (req, res) => {
     });
 });
 
-route.put('/approveSouvenir/:productId', (req, res) => {
+// การอนุมัติสินค้า
+// router.put('/approveSouvenir/:productId', (req, res) => {
+//     const productId = req.params.productId;
+//     const approverId = req.body.approver_id;
+//     const action = req.body.action || 'approved';
+
+//     if (!productId || !approverId) {
+//         return res.status(400).json({ error: 'Product ID and Approver ID are required' });
+//     }
+
+//     const getProductQuery = 'SELECT product_name, user_id FROM products WHERE product_id = ?';
+//     db.query(getProductQuery, [productId], (err, productResult) => {
+//         if (err) return res.status(500).json({ error: 'Database error (product)' });
+//         if (productResult.length === 0) return res.status(404).json({ error: 'Product not found' });
+
+//         const { product_name: productName, user_id: ownerId } = productResult[0];
+
+//         const getApproverQuery = `
+//             SELECT profiles.full_name, role.role_name 
+//             FROM users
+//             JOIN profiles ON users.user_id = profiles.user_id
+//             JOIN role ON users.role_id = role.role_id
+//             WHERE users.user_id = ?
+//         `;
+//         db.query(getApproverQuery, [approverId], (err, approverResult) => {
+//             if (err) return res.status(500).json({ error: 'Database error (approver)' });
+//             if (approverResult.length === 0) return res.status(404).json({ error: 'Approver not found' });
+
+//             const approverName = approverResult[0].full_name;
+//             const approverRole = approverResult[0].role_name;
+
+//             // Step 1: Log ก่อน
+//             const insertLog = `
+//                 INSERT INTO product_approval_log (product_id, approver_id, approver_name, approver_role, action)
+//                 VALUES (?, ?, ?, ?, ?)
+//             `;
+//             db.query(insertLog, [productId, approverId, approverName, approverRole, action], (err) => {
+//                 if (err) return res.status(500).json({ error: 'Error logging approval' });
+
+//                 // Step 2: แจ้งเตือนเจ้าของ
+//                 const message = action === 'approved'
+//                     ? `สินค้าของคุณ "${productName}" ได้รับการอนุมัติแล้ว!`
+//                     : `สินค้าของคุณ "${productName}" ถูกปฏิเสธและจะไม่ถูกแสดงบนเว็บไซต์`;
+
+//                 const notifyQuery = `
+//                     INSERT INTO notifications (user_id, type, message, related_id, send_date, status) 
+//                     VALUES (?, 'approve', ?, ?, NOW(), 'ยังไม่อ่าน')
+//                     ON DUPLICATE KEY UPDATE 
+//                         message = VALUES(message),
+//                         send_date = NOW(),
+//                         status = 'ยังไม่อ่าน';
+//                     `;
+//                 db.query(notifyQuery, [ownerId, message, productId], (err) => {
+//                     if (err) return res.status(500).json({ error: 'Error sending notification' });
+
+//                     // Step 3: อัปเดตหรือ ลบจริง
+//                     if (action === 'approved') {
+//                         db.query('UPDATE products SET status = ? WHERE product_id = ?', ['1', productId], (err) => {
+//                             if (err) return res.status(500).json({ error: 'Error updating product status' });
+//                             return res.status(200).json({ message: 'Product approved and logged' });
+//                         });
+//                     } else if (action === 'rejected') {
+//                         db.query('DELETE FROM products WHERE product_id = ?', [productId], (err) => {
+//                             if (err) return res.status(500).json({ error: 'Error deleting rejected product' });
+//                             return res.status(200).json({ message: 'Product rejected, logged, and deleted' });
+//                         });
+//                     } else {
+//                         return res.status(400).json({ error: 'Invalid action type' });
+//                     }
+//                 });
+//             });
+//         });
+//     });
+// });
+
+// การอนุมัติสินค้า
+router.put('/approveSouvenir/:productId', (req, res) => {
     const productId = req.params.productId;
+    const approverId = req.body.approver_id;
+    const action = req.body.action || 'approved';
 
-    if (!productId) {
-        return res.status(400).json({ error: 'Product ID is required' });
+    if (!productId || !approverId) {
+        return res.status(400).json({ error: 'Product ID and Approver ID are required' });
     }
 
-    const query = 'UPDATE products SET status = "1" WHERE product_id = ?';
-    
-    db.query(query, [productId], (err, result) => {
-        if (err) {
-            console.error('Error updating product status:', err);
-            return res.status(500).json({ error: 'Database error' });
-        }
+    const getProductQuery = 'SELECT product_name, user_id FROM products WHERE product_id = ?';
+    db.query(getProductQuery, [productId], (err, productResult) => {
+        if (err) return res.status(500).json({ error: 'Database error (product)' });
+        if (productResult.length === 0) return res.status(404).json({ error: 'Product not found' });
 
-        if (result.affectedRows === 0) {
-            return res.status(404).json({ error: 'Product not found or already updated' });
-        }
+        const { product_name: productName, user_id: ownerId } = productResult[0];
 
-        res.status(200).json({ message: 'Product status updated successfully' });
+        const getApproverQuery = `
+            SELECT profiles.full_name, role.role_name 
+            FROM users
+            JOIN profiles ON users.user_id = profiles.user_id
+            JOIN role ON users.role_id = role.role_id
+            WHERE users.user_id = ?
+        `;
+        db.query(getApproverQuery, [approverId], (err, approverResult) => {
+            if (err) return res.status(500).json({ error: 'Database error (approver)' });
+            if (approverResult.length === 0) return res.status(404).json({ error: 'Approver not found' });
+
+            const approverName = approverResult[0].full_name;
+            const approverRole = approverResult[0].role_name;
+
+            // บันทึก Log
+            const insertLog = `
+                INSERT INTO product_approval_log (product_id, approver_id, approver_name, approver_role, action)
+                VALUES (?, ?, ?, ?, ?)
+            `;
+            db.query(insertLog, [productId, approverId, approverName, approverRole, action], (err) => {
+                if (err) return res.status(500).json({ error: 'Error logging approval' });
+
+                // แจ้งเตือนเจ้าของ
+                const message = action === 'approved'
+                    ? `สินค้าของคุณ "${productName}" ได้รับการอนุมัติแล้ว!`
+                    : `สินค้าของคุณ "${productName}" ถูกปฏิเสธและจะไม่ถูกแสดงบนเว็บไซต์`;
+
+                const notifyQuery = `
+                    INSERT INTO notifications (user_id, type, message, related_id, send_date, status) 
+                    VALUES (?, 'approve', ?, ?, NOW(), 'ยังไม่อ่าน')
+                    ON DUPLICATE KEY UPDATE 
+                        message = VALUES(message),
+                        send_date = NOW(),
+                        status = 'ยังไม่อ่าน';
+                `;
+                db.query(notifyQuery, [ownerId, message, productId], (err) => {
+                    if (err) return res.status(500).json({ error: 'Error sending notification' });
+
+                    // ถ้าอนุมัติ
+                    if (action === 'approved') {
+                        db.query('UPDATE products SET status = ? WHERE product_id = ?', ['1', productId], (err) => {
+                            if (err) return res.status(500).json({ error: 'Error updating product status' });
+
+                            // ตรวจสอบว่า product_slot ถึงวันเปิดขายหรือยัง
+                            const checkSlotQuery = `
+                                SELECT * FROM product_slots 
+                                WHERE product_id = ? AND start_date <= NOW()
+                            `;
+                            db.query(checkSlotQuery, [productId], (err, slotResult) => {
+                                if (err) return res.status(500).json({ error: 'Error checking product slot' });
+
+                                if (slotResult.length > 0) {
+                                    // ถ้าถึงวันเปิดขายแล้ว -> เปลี่ยนสถานะเป็น active
+                                    const updateSlotQuery = `
+                                        UPDATE product_slots 
+                                        SET status = 'active' 
+                                        WHERE product_id = ? AND start_date <= NOW()
+                                    `;
+                                    db.query(updateSlotQuery, [productId], (err) => {
+                                        if (err) return res.status(500).json({ error: 'Error updating slot status' });
+                                        return res.status(200).json({ message: 'Product approved and slot activated' });
+                                    });
+                                } else {
+                                    // ยังไม่ถึงวันเปิดขาย
+                                    return res.status(200).json({ message: 'Product approved but slot not active yet' });
+                                }
+                            });
+                        });
+                    }
+                    else if (action === 'rejected') {
+                        db.query('DELETE FROM products WHERE product_id = ?', [productId], (err) => {
+                            if (err) return res.status(500).json({ error: 'Error deleting rejected product' });
+                            return res.status(200).json({ message: 'Product rejected, logged, and deleted' });
+                        });
+                    }
+                    else {
+                        return res.status(400).json({ error: 'Invalid action type' });
+                    }
+                });
+            });
+        });
     });
 });
+
 
 // แก้ไขข้อมูลสินค้า
-route.put('/editSouvenir/:id', (req, res) => {
+router.put('/editSouvenir/:id', (req, res) => {
     const productId = req.params.id;
     const { product_name, price, status } = req.body;
 
@@ -242,12 +1037,12 @@ route.put('/editSouvenir/:id', (req, res) => {
         return res.status(400).json({ error: 'Product ID, name, price, and status are required' });
     }
 
-    const query = 
-    `    UPDATE products 
+    const query =
+        `    UPDATE products 
         SET product_name = ?, price = ?, status = ? 
         WHERE product_id = ?
     `;
-    
+
     db.query(query, [product_name, price, status, productId], (err, result) => {
         if (err) {
             console.error('Error updating product:', err);
@@ -262,4 +1057,1219 @@ route.put('/editSouvenir/:id', (req, res) => {
     });
 });
 
-module.exports = route;
+// ลบสินค้า
+router.delete('/deleteSouvenir/:id', (req, res) => {
+    const productId = req.params.id;
+
+    // ดึงข้อมูล product_name และ user_id ของสินค้าที่ถูกลบ
+    const getProductQuery = 'SELECT product_name, user_id FROM products WHERE product_id = ?';
+    db.query(getProductQuery, [productId], (err, productResult) => {
+        if (err || productResult.length === 0) return res.status(500).json({ error: 'Error fetching product information' });
+
+        const productName = productResult[0].product_name;
+        const userId = productResult[0].user_id;
+
+        // เพิ่มแจ้งเตือนสินค้าโดนลบ
+        const insertNotification = `
+            INSERT INTO notifications (user_id, type, message, related_id, send_date, status) 
+            VALUES (?, 'delete', ?, ?, NOW(), 'ยังไม่อ่าน')
+            ON DUPLICATE KEY UPDATE 
+            message = VALUES(message),
+            send_date = NOW(),
+            status = 'ยังไม่อ่าน';
+        `;
+        const message = `สินค้าของคุณ "${productName}" ถูกลบ`;
+        db.query(insertNotification, [userId, message, productId], (err) => {
+            if (err) {
+                console.error("Error inserting notification:", err);
+                return res.status(500).json({ error: 'Error inserting notification' });
+            }
+
+            // ลบสินค้า
+            const deleteProductQuery = 'DELETE FROM products WHERE product_id = ?';
+            db.query(deleteProductQuery, [productId], (err, result) => {
+                if (err) {
+                    console.error('Error deleting product:', err);
+                    return res.status(500).json({ error: 'Failed to delete product' });
+                }
+
+                res.status(200).json({ message: 'Product deleted successfully and user notified' });
+            });
+        });
+    });
+});
+
+//----------------ส่วนของการจัดการ slots สินค้า------------------------------------------------------------------
+// ดึง slots ของ product
+router.get('/product-slots/:productId', (req, res) => {
+    const { productId } = req.params;
+
+    const query = `
+        SELECT 
+            ps.*, 
+            p.product_name
+        FROM product_slots ps
+        JOIN products p ON ps.product_id = p.product_id
+        WHERE ps.product_id = ?
+        ORDER BY ps.slot_id ASC
+    `;
+
+    db.query(query, [productId], (err, results) => {
+        if (err) {
+            console.error("Database query failed:", err);
+            return res.status(500).json({ error: "Database query failed" });
+        }
+        res.json(results);
+    });
+});
+
+
+// เพิ่ม slot ให้สินค้า 
+router.post('/products/add-slot/:productId', (req, res) => {
+    const { productId } = req.params;
+    const { slot_name, quantity } = req.body;
+
+    if (!slot_name || !quantity) {
+        return res.status(400).json({ error: 'Slot name และ quantity จำเป็นต้องระบุ' });
+    }
+
+    const query = `
+        INSERT INTO product_slots (product_id, slot_name, quantity, status, created_at) 
+        VALUES (?, ?, ?, 'pending', NOW())
+    `;
+
+    db.query(query, [productId, slot_name, quantity], (err) => {
+        if (err) return res.status(500).json({ error: 'Database error inserting slot' });
+        return res.status(201).json({ message: 'Slot ถูกสร้างเรียบร้อยและขายได้เรื่อยๆจนกว่าสินค้าจะหมด' });
+    });
+});
+
+// ตัวอย่างการสั่งซื้อสินค้าเพื่อตรวจสอบ quantity
+router.post('/products/order/:productId', (req, res) => {
+    const { productId } = req.params;
+    const { order_qty } = req.body;
+
+    db.query(
+        "SELECT slot_id, quantity FROM product_slots WHERE product_id = ? AND status = 'available' LIMIT 1",
+        [productId],
+        (err, results) => {
+            if (err) return res.status(500).json({ error: 'DB error' });
+
+            const slot = results[0];
+            if (!slot) return res.status(400).json({ error: 'สินค้าหมด' });
+            if (slot.quantity < order_qty) return res.status(400).json({ error: 'จำนวนสินค้าที่สั่งเกินไป' });
+
+            const newQty = slot.quantity - order_qty;
+            const slotStatus = newQty === 0 ? 'sold_out' : 'available';
+
+            db.query(
+                "UPDATE product_slots SET quantity = ?, status = ? WHERE slot_id = ?",
+                [newQty, slotStatus, slot.slot_id],
+                (err) => {
+                    if (err) return res.status(500).json({ error: 'DB update error' });
+                    res.json({ message: 'สั่งซื้อสำเร็จ', remaining: newQty });
+                }
+            );
+        }
+    );
+});
+
+// แก้ไข slot สินค้า
+router.put('/products/edit-slot/:slotId', (req, res) => {
+    const { slotId } = req.params;
+    const { slot_name, quantity, start_date, end_date } = req.body;
+
+    db.query(`SELECT * FROM product_slots WHERE slot_id = ?`, [slotId], (err, rows) => {
+        if (err) return res.status(500).json({ error: err });
+        if (!rows.length) return res.status(404).json({ error: 'ไม่พบล็อต' });
+
+        const slot = rows[0];
+        // ตรวจสอบจำนวนไม่ให้น้อยกว่า sold + reserved
+        if (quantity && quantity < slot.sold + slot.reserved) {
+            return res.status(400).json({ error: `จำนวนต้องไม่ต่ำกว่า sold + reserved (${slot.sold + slot.reserved})` });
+        }
+
+        const updateSql = `
+            UPDATE product_slots
+            SET slot_name = ?, quantity = ?, start_date = ?, end_date = ?
+            WHERE slot_id = ?
+        `;
+        db.query(updateSql, [
+            slot_name || slot.slot_name,
+            quantity || slot.quantity,
+            start_date || slot.start_date,
+            end_date || slot.end_date,
+            slotId
+        ], (err2) => {
+            if (err2) return res.status(500).json({ error: err2 });
+
+            // logAdminAction(req.admin_id, `แก้ไขล็อต ID:${slotId}`);
+            res.json({ success: true });
+        });
+    });
+});
+
+// ลบ slot (เฉพาะยังไม่ขายและไม่เพิ่มลงตะกร้า)
+router.delete('/products/delete-slot/:slotId', (req, res) => {
+    const { slotId } = req.params;
+
+    db.query(`SELECT * FROM product_slots WHERE slot_id = ?`, [slotId], (err, rows) => {
+        if (err) return res.status(500).json({ error: err });
+        if (!rows.length) return res.status(404).json({ error: 'ไม่พบล็อต' });
+
+        const slot = rows[0];
+        if (slot.sold > 0 || slot.reserved > 0) {
+            return res.status(400).json({ error: 'ไม่สามารถลบล็อตที่มีการขายหรือจองแล้วได้' });
+        }
+
+        db.query(`DELETE FROM product_slots WHERE slot_id = ?`, [slotId], (err2) => {
+            if (err2) return res.status(500).json({ error: err2 });
+
+            // logAdminAction(req.admin_id, `ลบล็อต ID:${slotId}`);
+            res.json({ success: true });
+        });
+    });
+});
+
+// คืนสินค้า / ยกเลิกคำสั่งซื้อ
+// router.post('/products/return/:orderId', (req, res) => {
+//     const { orderId } = req.params;
+
+//     // ดึง slot ของ order
+//     db.query(
+//         `SELECT slot_id, quantity FROM orders
+//          JOIN product_slots ON orders.slot_id = product_slots.slot_id
+//          WHERE order_id = ?`,
+//         [orderId],
+//         (err, results) => {
+//             if (err) return res.status(500).json({ error: 'DB error' });
+//             if (!results.length) return res.status(400).json({ error: 'Order ไม่พบ' });
+
+//             const slot = results[0];
+//             const updatedQty = slot.quantity + 1; // คืน 1 หน่วย (ปรับตามจริง)
+
+//             db.query(
+//                 "UPDATE product_slots SET quantity = ?, status = 'available' WHERE slot_id = ?",
+//                 [updatedQty, slot.slot_id],
+//                 (err) => {
+//                     if (err) return res.status(500).json({ error: 'DB update error' });
+//                     res.json({ message: 'คืนสินค้าเรียบร้อย', updatedQty });
+//                 }
+//             );
+//         }
+//     );
+// });
+
+// -------------------ส่วนของการจัดการผู้ใช้และแดชบอร์ด----------------------------------------
+// ดึงข้อมูลสรุปกิจกรรม
+router.get('/activity-summary', (req, res) => {
+    const querySummary = `
+    SELECT 
+        (SELECT COUNT(*) FROM activity WHERE deleted_at IS NULL) AS total_activities, -- กิจกรรมทั้งหมด
+        (SELECT COUNT(*) FROM participants WHERE activity_id IN (SELECT activity_id FROM activity WHERE deleted_at IS NULL)) AS total_participants, -- ผู้เข้าร่วมทั้งหมด
+        (SELECT COUNT(*) FROM activity WHERE activity_date > CURDATE() AND deleted_at IS NULL) AS upcoming_activities, -- กิจกรรมที่ยังไม่ได้เริ่ม
+        (SELECT COUNT(*) FROM activity WHERE COALESCE(end_date, activity_date) < CURDATE() AND deleted_at IS NULL) AS completed_activities, -- กิจกรรมที่สิ้นสุดแล้ว
+        (SELECT COUNT(*) FROM activity WHERE activity_date <= CURDATE() AND COALESCE(end_date, activity_date) >= CURDATE() AND deleted_at IS NULL) AS ongoing_activities -- กิจกรรมที่กำลังดำเนินการ
+    FROM DUAL
+    `;
+
+    db.query(querySummary, (err, results) => {
+        if (err) {
+            console.error('เกิดข้อผิดพลาดในการดึงข้อมูลสรุปกิจกรรม:', err);
+            return res.status(500).json({ success: false, message: 'เกิดข้อผิดพลาดในระบบ' });
+        }
+
+        res.status(200).json({ success: true, data: results[0] });
+    });
+});
+
+//จัดการผู้ใช้
+// ดึงข้อมูลผู้ใช้ทั้งหมด
+router.get('/users', (req, res) => {
+    const query = `
+        SELECT 
+            users.user_id, 
+            users.role_id, 
+            users.is_active,
+            role.role_name,  
+            profiles.full_name, 
+            profiles.email        
+        FROM users 
+        LEFT JOIN profiles ON users.user_id = profiles.user_id
+        LEFT JOIN role ON users.role_id = role.role_id
+        WHERE users.deleted_at IS NULL
+    `;
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error('Database query failed:', err);
+            return res.status(500).json({ error: 'Database query failed' });
+        }
+        res.json(results);
+    });
+});
+
+// -----------------------ส่วนของผู้ใช้----------------------
+// ดึงข้อมูลผู้ใช้ตาม ID
+router.get('/users/:userId', (req, res) => {
+    const { userId } = req.params;
+
+    const query = `
+        SELECT 
+            users.user_id, 
+            users.role_id,  
+            role.role_name,
+            users.is_active,
+            profiles.full_name, 
+            profiles.email, 
+            profiles.phone, 
+            profiles.address,
+            profiles.image_path,
+            educations.education_id,
+            educations.degree_id,
+            educations.major_id,
+            educations.studentId,
+            educations.graduation_year,
+            educations.entry_year,
+            degree.degree_name,
+            major.major_name
+        FROM users 
+        LEFT JOIN profiles ON users.user_id = profiles.user_id
+        LEFT JOIN role ON users.role_id = role.role_id
+        LEFT JOIN educations ON users.user_id = educations.user_id
+        LEFT JOIN degree ON educations.degree_id = degree.degree_id
+        LEFT JOIN major ON educations.major_id = major.major_id
+        WHERE users.user_id = ? 
+    `;
+
+    const queryactivity = `
+    SELECT 
+      participants.activity_id,
+      activity.activity_name,
+      activity.activity_date,
+      activity.description,
+       (
+        SELECT activity_image.image_path 
+        FROM activity_image 
+        WHERE activity_image.activity_id = activity.activity_id 
+        LIMIT 1
+      ) AS image_path,
+      COALESCE(end_date, activity_date) AS end_date, 
+      CASE
+        WHEN COALESCE(end_date, activity_date) < CURDATE() THEN 1  -- เสร็จแล้ว (1)
+        WHEN activity_date > CURDATE() THEN 0  -- กำลังจะจัดขึ้น (0)
+        ELSE 2  -- กำลังดำเนินการ (2)
+      END AS status
+    FROM participants
+    JOIN activity ON participants.activity_id = activity.activity_id
+    WHERE participants.user_id = ?
+    `;
+
+    const queryWebboard = `
+        SELECT webboard_id, title, created_at
+        FROM webboard
+        WHERE user_id = ? AND deleted_at IS NULL
+    `;
+
+    db.query(query, [userId], (err, results) => {
+        if (err) {
+            console.error('Error fetching user profile:', err);
+            return res.status(500).json({ success: false, message: 'Database error' });
+        }
+
+        if (results.length === 0) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        // กรณีผู้ใช้มีหลายวุฒิการศึกษา
+        const userInfo = {
+            user_id: results[0].user_id,
+            role_id: results[0].role_id,
+            role_name: results[0].role_name,
+            is_active: results[0].is_active,
+            full_name: results[0].full_name,
+            email: results[0].email,
+            phone: results[0].phone,
+            address: results[0].address,
+            image_path: results[0].image_path,
+            educations: results.map(edu => ({
+                degree: edu.degree_id,
+                degree_name: edu.degree_name,
+                major: edu.major_id,
+                major_name: edu.major_name,
+                studentId: edu.studentId,
+                graduation_year: edu.graduation_year,
+                entry_year: edu.entry_year,
+            })),
+        };
+
+        // ดึงกิจกรรมและโพสต์พร้อมกัน
+        db.query(queryactivity, [userId], (errAct, actResults) => {
+            if (errAct) {
+                console.error("Error fetching activities:", errAct);
+                return res.status(500).json({ success: false, message: 'Error fetching activities' });
+            }
+
+            db.query(queryWebboard, [userId], (errPost, postResults) => {
+                if (errPost) {
+                    console.error("Error fetching posts:", errPost);
+                    return res.status(500).json({ success: false, message: 'Error fetching posts' });
+                }
+
+                userInfo.activities = actResults || [];
+                userInfo.posts = postResults || [];
+
+                res.status(200).json({ success: true, data: userInfo });
+            });
+        });
+    });
+});
+
+// แก้ไขโปรไฟล์ผู้ใช้
+router.put('/edit-profile-users/:userId', (req, res) => {
+    const userId = req.params.userId;
+    const { email, phone, address, educations } = req.body;
+
+    const queryUpdateProfile = `UPDATE profiles SET email = ?, phone = ?, address = ? WHERE user_id = ?`;
+    db.query(queryUpdateProfile, [email, phone, address, userId], (err) => {
+        if (err) {
+            console.error("Profile update error:", err);
+            return res.status(500).json({ success: false, message: "อัปเดตโปรไฟล์ล้มเหลว" });
+        }
+
+        const deleteEducations = `DELETE FROM educations WHERE user_id = ?`;
+        db.query(deleteEducations, [userId], (err) => {
+            if (err) {
+                console.error("Education delete error:", err);
+                return res.status(500).json({ success: false, message: "ลบข้อมูลการศึกษาล้มเหลว" });
+            }
+
+            if (educations && educations.length > 0) {
+                const filtered = educations.filter(e =>
+                    e.degree_id && e.major_id && e.studentId && e.graduation_year
+                );
+
+                if (filtered.length === 0) {
+                    return res.status(400).json({ success: false, message: "ข้อมูลการศึกษาไม่ครบถ้วน" });
+                }
+
+                const insertEduSql = `
+                    INSERT INTO educations (user_id, degree_id, major_id, studentId, graduation_year, entry_year)
+                    VALUES ?
+                `;
+                const values = filtered.map(e => [
+                    userId,
+                    e.degree_id,
+                    e.major_id,
+                    e.studentId,
+                    e.graduation_year,
+                    e.entry_year,
+                ]);
+
+                db.query(insertEduSql, [values], (err, result) => {
+                    if (err) {
+                        console.error("Education insert error:", err);
+                        return res.status(500).json({ success: false, message: "เพิ่มข้อมูลการศึกษาล้มเหลว" });
+                    }
+
+                    logManage(userId, 'แก้ไขโปรไฟล์ผู้ใช้');
+                    return res.json({ success: true, message: "อัปเดตข้อมูลสำเร็จ" });
+                });
+
+            } else {
+                logManage(userId, 'แก้ไขโปรไฟล์ผู้ใช้ (ไม่มีข้อมูลการศึกษา)');
+                return res.json({ success: true, message: "อัปเดตข้อมูลสำเร็จ (ไม่มีข้อมูลการศึกษาใหม่)" });
+            }
+        });
+    });
+});
+
+// เพิ่มผู้ใช้
+router.post("/add-user", upload.single("image_path"), (req, res) => {
+    const { full_name, email, phone, username, password, role } = req.body;
+    const education = req.body.education ? JSON.parse(req.body.education) : [];
+    const image_path = req.file ? `uploads/${req.file.filename}` : 'uploads/default-profile.png';
+    // insert users
+    const addUsers = `INSERT INTO users (role_id) VALUES (?);`;
+
+    db.query(addUsers, [role], (err, userResult) => {
+        if (err) return res.status(500).json({ message: "Error inserting user" });
+
+        const userId = userResult.insertId;
+
+        const queryLogin = `INSERT INTO login (user_id, username, password) VALUES (?, ?, ?)`;
+        db.query(queryLogin, [userId, username, password], (err) => {
+            if (err) return res.status(500).json({ message: "Error inserting login" });
+
+            const queryProfile = `
+                INSERT INTO profiles (user_id, full_name, email, phone, image_path)
+                VALUES (?, ?, ?, ?, ?)
+            `;
+            db.query(queryProfile, [userId, full_name, email, phone, image_path], (err) => {
+                if (err) return res.status(500).json({ message: "Error inserting profile" });
+
+                if (education.length > 0) {
+                    const queryEdu = `
+                        INSERT INTO educations (user_id, degree_id, major_id, studentId, graduation_year, entry_year)
+                        VALUES ?
+                    `;
+                    const values = education.map((edu) => [
+                        userId,
+                        edu.degree || null,
+                        edu.major || null,
+                        edu.studentId || null,
+                        edu.graduation_year || null,
+                        edu.entry_year || null,
+                    ]);
+
+                    db.query(queryEdu, [values], (err) => {
+                        if (err) return res.status(500).json({ message: "Error inserting education" });
+
+                        return res.json({ success: true, message: "User created successfully" });
+                    });
+                } else {
+                    return res.json({ success: true, message: "User created successfully" });
+                }
+            });
+        });
+    });
+});
+
+
+// เปลี่ยนบทบาทผู้ใช้
+router.put('/:userId/role', (req, res) => {
+    const { userId } = req.params;
+    const { role } = req.body;
+
+    const query = "UPDATE users SET role_id = ? WHERE user_id = ?";
+    db.query(query, [role, userId], (err, results) => {
+        if (err) {
+            console.error("Error updating role:", err);
+            return res.status(500).send("Error updating role");
+        }
+
+        // console.log("Role updated successfully for user ID:", userId);
+        logManage(userId, 'เปลี่ยนบทบาทผู้ใช้');
+
+        res.send("เปลี่ยนบทบาทผู้ใช้สำเร็จ");
+    });
+});
+
+// ลบผู้ใช้ (Soft Delete)
+router.delete("/delete-user/:userId", (req, res) => {
+    const { userId } = req.params;
+
+    const query = "UPDATE users SET deleted_at = NOW() WHERE user_id = ?";
+    db.query(query, [userId], (err, results) => {
+        if (err) {
+            console.error("Error soft-deleting user:", err);
+            return res.status(500).send("เกิดข้อผิดพลาดในการลบผู้ใช้");
+        }
+
+        // ตรวจสอบว่ามีการอัปเดตแถวจริงหรือไม่
+        if (results.affectedRows === 0) {
+            return res.status(404).send("ไม่พบผู้ใช้ที่ต้องการลบ");
+        }
+
+        //บันทึก log
+        logManage(userId, 'ลบผู้ใช้');
+
+        res.send("ลบผู้ใช้สำเร็จ");
+    });
+});
+
+
+// เปลี่ยนสถานะผู้ใช้ (เปิดใช้งาน/ระงับ)
+router.put("/:userId/status", (req, res) => {
+    const { userId } = req.params;
+    const { is_active } = req.body;
+
+    const query = "UPDATE users SET is_active = ? WHERE user_id = ?";
+    db.query(query, [is_active, userId], (err, results) => {
+        if (err) {
+            console.error("Error updating status:", err);
+            return res.status(500).send("Error updating status");
+        }
+
+        logManage(userId, 'เปลี่ยนสถานะผู้ใช้');
+        res.send("User status updated successfully");
+    });
+});
+
+// -----------------ส่วน dashboard-----------------
+// จำนวนศิษย์เก่าทั้งหมด 
+router.get('/total-alumni', (req, res) => {
+    const query = 'SELECT COUNT(*) AS totalAlumni FROM users WHERE role_id = 3';
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error('Database query failed:', err);
+            return res.status(500).json({ error: 'Database query failed' });
+        }
+        res.json(results[0]);
+    });
+});
+
+// จำนวนกิจกรรมในแต่ละปี
+router.get("/activity-per-year", (req, res) => {
+    const { years } = req.query;
+    const yearList = years ? years.split(",") : [];
+
+    const sql = `
+    SELECT 
+      YEAR(created_at) AS year,
+      MONTH(created_at) AS month_number,
+      COUNT(*) AS total_activities
+    FROM activity
+    WHERE YEAR(created_at) IN (?)
+    GROUP BY YEAR(created_at), MONTH(created_at)
+    ORDER BY YEAR(created_at) DESC, MONTH(created_at);
+  `;
+
+    db.query(sql, [yearList], (err, result) => {
+        if (err) return res.status(500).json({ error: "Database error" });
+        res.json(result);
+    });
+});
+
+
+router.get("/available-years", (req, res) => {
+    const sql = `
+    SELECT DISTINCT YEAR(created_at) AS year 
+    FROM donations
+    UNION
+    SELECT DISTINCT YEAR(created_at) AS year 
+    FROM activity
+    ORDER BY year DESC;
+  `;
+    db.query(sql, (err, result) => {
+        if (err) return res.status(500).json({ error: "Database error" });
+        res.json(result.map(r => r.year));
+    });
+});
+
+// ดึงโครงการและกิจกรรมไปแสดงหน้า dashboard-stat
+router.get("/summary-totals", (req, res) => {
+    const { year } = req.query;
+    const sql = `
+    SELECT 
+      (SELECT COALESCE(SUM(amount),0) 
+       FROM donations 
+       WHERE YEAR(created_at) = ? AND payment_status = 'paid') AS total_donations,
+      (SELECT COALESCE(COUNT(*),0) 
+       FROM activity 
+       WHERE YEAR(created_at) = ?) AS total_activities
+  `;
+
+    db.query(sql, [year, year], (err, result) => {
+        if (err) return res.status(500).json({ error: "Database error" });
+        res.json(result[0]);
+    });
+});
+
+
+// จำนวนกิจกรรมในแต่ละเดือน 
+router.get("/activity-per-month", (req, res) => {
+    const { year } = req.query;
+
+    let query = `
+    SELECT 
+      YEAR(activity_date) AS year,
+      MONTH(activity_date) AS month_number,
+      MONTHNAME(activity_date) AS month_name,
+      COUNT(*) AS total_activities
+    FROM activity
+    WHERE deleted_at IS NULL
+  `;
+
+    const params = [];
+    if (year) {
+        query += ` AND YEAR(activity_date) = ? `;
+        params.push(year);
+    }
+
+    query += `
+    GROUP BY YEAR(activity_date), MONTH(activity_date)
+    ORDER BY YEAR(activity_date), MONTH(activity_date)
+  `;
+
+    db.query(query, params, (err, results) => {
+        if (err) {
+            console.error("Database query failed:", err);
+            return res.status(500).json({ error: "Database query failed" });
+        }
+
+        res.json(results);
+    });
+});
+
+// สถิติการบริจาคแยกตามประเภทโครงการ
+router.get('/donation-stats', (req, res) => {
+    const query = `
+        SELECT p.donation_type, SUM(d.amount) AS total
+        FROM donations d
+        JOIN donationproject p ON d.project_id = p.project_id
+        WHERE d.payment_status = 'paid' 
+        GROUP BY p.donation_type
+    `;
+
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error("Error fetching donation stats:", err);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+
+        // mapping ประเภทการบริจาคเป็นภาษาไทย
+        const typeMap = {
+            unlimited: "บริจาคแบบไม่จำกัดจำนวน",
+            fundraising: "บริจาคแบบระดมทุน",
+            things: "บริจาคสิ่งของ"
+        };
+
+        const formatted = results.map(row => ({
+            donation_type: typeMap[row.donation_type] || row.donation_type,
+            total: row.total || 0
+        }));
+
+        res.json(formatted);
+    });
+});
+
+// ดึงข้อมูลแดชบอร์ด
+router.get('/dashboard-stats', (req, res) => {
+    let result = {
+        totalParticipants: 0,
+        ongoingActivity: 0,
+        ongoingProject: 0,
+        totalDonations: 0,
+        totalProjectsAmount: 0,
+        totalGeneralAmount: 0
+    };
+
+    // ผู้เข้าร่วม
+    db.query('SELECT COUNT(*) AS total FROM participants', (err, participants) => {
+        if (err) return res.status(500).json({ message: 'Internal server error' });
+        result.totalParticipants = participants[0].total;
+
+        // จำนวนกิจกรรมที่กำลังดำเนินการอยู่
+        db.query('SELECT COUNT(*) AS total FROM activity WHERE status = 2', (err, activities) => {
+            if (err) return res.status(500).json({ message: 'Internal server error' });
+            result.ongoingActivity = activities[0].total;
+
+            // จำนวนโครงการที่กำลังดำเนินการอยู่
+            const projectQuery = `
+        SELECT COUNT(DISTINCT p.project_id) AS total
+        FROM donationproject p
+        LEFT JOIN donations d 
+          ON p.project_id = d.project_id 
+          AND d.payment_status = 'paid'
+        WHERE p.status = "1"
+      `;
+            db.query(projectQuery, (err, donationproject) => {
+                if (err) return res.status(500).json({ message: 'Internal server error' });
+                result.ongoingProject = donationproject[0].total;
+
+                //ยอดบริจาครวมทั้งหมด
+                const donationQuery = `
+          SELECT 
+            SUM(CASE WHEN d.project_id IS NOT NULL THEN d.amount ELSE 0 END) AS totalProjectsAmount,
+            SUM(CASE WHEN d.project_id IS NULL THEN d.amount ELSE 0 END) AS totalGeneralAmount
+          FROM donations d
+          WHERE d.payment_status = 'paid'
+        `;
+                db.query(donationQuery, (err, donations) => {
+                    if (err) return res.status(500).json({ message: 'Internal server error' });
+                    const summary = donations[0] || {};
+                    result.totalProjectsAmount = Number(summary.totalProjectsAmount) || 0;
+                    result.totalGeneralAmount = Number(summary.totalGeneralAmount) || 0;
+                    result.totalDonations = result.totalProjectsAmount + result.totalGeneralAmount;
+
+                    res.json(result);
+                });
+            });
+        });
+    });
+});
+
+// ดึงจำนวนการแจ้งเตือน
+router.get('/notification-counts', (req, res) => {
+    const query1 = `SELECT COUNT(*) AS count FROM donationproject WHERE status = 0`;
+    const query2 = `SELECT COUNT(*) AS count FROM products WHERE status = "0"`;
+
+    db.query(query1, (err, result1) => {
+        if (err) return res.status(500).json({ error: 'Query error 1' });
+
+        db.query(query2, (err, result2) => {
+            if (err) return res.status(500).json({ error: 'Query error 2' });
+
+            res.json({
+                donationRequests: result1[0].count,
+                souvenirRequests: result2[0].count
+            });
+        });
+    });
+});
+
+// ดึงระดับการศึกษา
+router.get("/degrees", (req, res) => {
+    db.query("SELECT degree_id, degree_name FROM degree", (err, result) => {
+        if (err) return res.status(500).json([]);
+        res.json(result);
+    });
+});
+
+// ดึงสาขา
+router.get("/majors", (req, res) => {
+    db.query("SELECT major_id, major_name FROM major", (err, result) => {
+        if (err) return res.status(500).json([]);
+        res.json(result);
+    });
+});
+
+//---------------การจัดการปัญหาการจัดส่ง-------------------------------
+// ดึงปัญหาการจัดส่งทั้งหมด
+router.get("/order-issue", (req, res) => {
+    const sql = `
+    SELECT 
+        i.issue_id, 
+        i.order_id, 
+        i.issue_type, 
+        i.description, 
+        i.evidence_path, 
+        i.contacted, 
+        i.created_at,
+        i.resolution_options,
+        o.order_status, 
+        o.total_amount,
+        u.full_name AS buyer_name,
+        ua.shippingAddress,
+        ua.province_name,
+        ua.district_name,
+        ua.sub_district_name,
+        ua.zip_code,
+        ua.phone,
+        GROUP_CONCAT(p.product_name SEPARATOR ', ') AS product_names
+    FROM order_issues i
+    JOIN orders o ON i.order_id = o.order_id
+    JOIN profiles u ON i.user_id = u.user_id
+    JOIN user_addresses ua ON ua.user_id = u.user_id AND ua.is_default = 1
+    JOIN order_detail oi ON oi.order_id = o.order_id
+    JOIN products p ON p.product_id = oi.product_id
+    WHERE 
+        o.order_status IN ('issue_reported', 'return_pending', 'return_approved')
+        AND p.is_official = 1
+    GROUP BY 
+        i.issue_id, i.order_id, i.issue_type, i.description, i.evidence_path, i.contacted, 
+        i.created_at, i.resolution_options, o.order_status, o.total_amount, 
+        u.full_name, ua.shippingAddress, ua.province_name, ua.district_name, 
+        ua.sub_district_name, ua.zip_code, ua.phone
+    ORDER BY i.created_at DESC;
+`;
+
+    db.query(sql, (err, results) => {
+        if (err) {
+            console.error("DB Error:", err);
+            return res.status(500).json({ error: "ไม่สามารถดึงข้อมูลได้" });
+        }
+
+        const formatted = results.map(r => {
+            let resolutionOptions = [];
+
+            try {
+                if (r.resolution_options && r.resolution_options.trim() !== '') {
+                    resolutionOptions = JSON.parse(r.resolution_options);
+                }
+            } catch (parseError) {
+                console.error(`JSON Parse Error for issue_id ${r.issue_id}:`, parseError);
+                resolutionOptions = [];
+            }
+
+            return {
+                ...r,
+                resolution_options: resolutionOptions
+            };
+        });
+
+        res.json({ success: true, data: formatted });
+    });
+});
+
+// แอดมินอัปเดตสถานะปัญหาการจัดส่ง / คืนเงิน
+router.put("/update-issue-status/:issueId", (req, res) => {
+    const { issueId } = req.params;
+    let { resolution_type, resolution_note, admin_status } = req.body;
+
+    // ตรวจสอบค่าที่ถูกต้อง
+    if (!["approved", "rejected", "resolved"].includes(admin_status)) {
+        return res.status(400).json({ error: "สถานะไม่ถูกต้อง" });
+    }
+
+    // ถ้า resolution_note เป็น object (กรณีคืนเงิน) → แปลงเป็น JSON string
+    let refundDate = null;
+    if (typeof resolution_note === "object" && resolution_note !== null) {
+        refundDate = resolution_note.refundDate || null;
+        resolution_note = JSON.stringify(resolution_note);
+    }
+
+    const selectQuery = `SELECT order_id, user_id FROM order_issues WHERE issue_id = ?`;
+    db.query(selectQuery, [issueId], (err, rows) => {
+        if (err || !rows.length) {
+            return res.status(404).json({ error: "ไม่พบปัญหานี้" });
+        }
+
+        const { order_id, user_id } = rows[0];
+
+        // อัปเดต order_issues
+        const updateIssueQuery = `
+            UPDATE order_issues 
+            SET admin_status = ?, resolution_type = ?, resolution_note = ?, refund_date = ?, updated_at = NOW()
+            WHERE issue_id = ?
+        `;
+        db.query(updateIssueQuery, [admin_status, resolution_type, resolution_note, refundDate, issueId], (err) => {
+            if (err) return res.status(500).json({ error: "อัปเดตสถานะปัญหาไม่สำเร็จ" });
+
+            // กำหนด order_status
+            let newOrderStatus;
+            if (resolution_type === "resend") {
+                newOrderStatus = "resend_processing";
+            } else if (resolution_type === "refund") {
+                newOrderStatus = "refund_approved";
+            } else {
+                newOrderStatus = "issue_rejected";
+            }
+
+            const updateOrderQuery = resolution_type === "resend"
+                ? `UPDATE orders SET order_status = ?, tracking_number = ? WHERE order_id = ?`
+                : `UPDATE orders SET order_status = ? WHERE order_id = ?`;
+
+            const params = resolution_type === "resend"
+                ? [newOrderStatus, resolution_note, order_id]
+                : [newOrderStatus, order_id];
+
+            db.query(updateOrderQuery, params, (err) => {
+                if (err) return res.status(500).json({ error: "อัปเดตคำสั่งซื้อไม่สำเร็จ" });
+
+                // สร้างข้อความแจ้งเตือน
+                let message;
+                if (resolution_type === "refund") {
+                    message = `คำสั่งซื้อของคุณได้รับการคืนเงินแล้ว (วันที่ ${refundDate || "ไม่ระบุ"})`;
+                } else if (resolution_type === "resend") {
+                    message = `คำสั่งซื้อ #${order_id} ของคุณจะถูกส่งสินค้าใหม่ Tracking: ${resolution_note}`;
+                } else {
+                    message = `คำสั่งซื้อ #${order_id} ไม่ได้รับการอนุมัติการแก้ไข`;
+                }
+
+                const notifyQuery = `
+                    INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
+                    VALUES (?, 'issue', ?, ?, NOW(), 'ยังไม่อ่าน')
+                `;
+                db.query(notifyQuery, [user_id, message, order_id], (err) => {
+                    if (err) console.error("DB Notification Error:", err);
+
+                    res.json({
+                        success: true,
+                        message: "อัปเดตสถานะเรียบร้อยแล้ว",
+                        issue_status: admin_status,
+                        resolution_type,
+                        resolution_note,
+                        refund_date: refundDate,
+                        order_status: newOrderStatus
+                    });
+                });
+            });
+        });
+    });
+});
+
+// --------------------------------ผู้ใช้ส่งสินค้าคืน----------------------------
+// ดึงสินค้าที่ผู้ใช้ส่งคืน
+router.get("/returned-orders", (req, res) => {
+    const sql = `
+       SELECT 
+    o.order_id, o.order_status, o.user_id, o.total_amount,
+
+     -- join ที่อยู่จาก user_addresses
+      ua.shippingAddress,
+      ua.sub_district_name,
+      ua.district_name,
+      ua.province_name,
+      ua.zip_code,
+      ua.phone,
+      CONCAT(
+        ua.shippingAddress, ' ',
+        ua.sub_district_name, ' ',
+        ua.district_name, ' ',
+        ua.province_name, ' ',
+        ua.zip_code
+      ) AS full_address,
+
+    p.product_id, p.product_name, od.quantity, od.total,
+    pf.full_name AS buyer_name,
+
+    -- ข้อมูลจาก order_returns
+    r.return_id, r.status AS return_status, r.evidence_path AS return_evidence_path,
+    r.created_at AS return_created_at,
+
+    -- ข้อมูลจาก order_issues 
+    i.issue_id, i.issue_type, i.description, 
+    i.contacted,
+    i.resolution_options, i.evidence_path AS issue_evidence_path,
+    i.created_at AS issue_created_at
+FROM orders o
+JOIN order_detail od ON o.order_id = od.order_id
+LEFT JOIN products p ON p.product_id = od.product_id
+LEFT JOIN order_issues i ON o.order_id = i.order_id 
+LEFT JOIN order_returns r ON i.issue_id = r.issue_id 
+LEFT JOIN user_addresses ua ON ua.user_id = o.user_id AND ua.is_default = 1
+LEFT JOIN profiles pf ON o.user_id = pf.user_id 
+WHERE o.order_status IN ('return_pending', 'return_approved', 'refund_approved', 'resend_processing')
+ORDER BY o.create_at DESC
+    `;
+
+    db.query(sql, (err, results) => {
+        if (err) return res.status(500).json({ success: false, error: err.message });
+
+        // จัดกลุ่ม order -> products
+        const ordersMap = {};
+        results.forEach(row => {
+            if (!ordersMap[row.order_id]) {
+                ordersMap[row.order_id] = {
+                    order_id: row.order_id,
+                    order_status: row.order_status,
+                    user_id: row.user_id,
+                    total_amount: row.total_amount,
+                    full_address: row.full_address,
+                    contacted: row.contacted,
+                    buyer_name: row.buyer_name,
+
+                    // ข้อมูล Return
+                    returns: row.return_id
+                        ? {
+                            return_id: row.return_id,
+                            status: row.return_status,
+                            evidence_path: row.return_evidence_path,
+                            created_at: row.return_created_at,
+
+                        }
+                        : null,
+
+                    // ข้อมูล Issue (เพิ่มเข้ามา)
+                    issue: row.issue_id
+                        ? {
+                            issue_id: row.issue_id,
+                            issue_type: row.issue_type,
+                            description: row.description,
+                            resolution_option: row.resolution_option,
+                            evidence_path: row.issue_evidence_path,
+                            created_at: row.issue_created_at,
+                        }
+                        : null,
+
+                    // Flatten ข้อมูลสำคัญไว้ที่ root level
+                    issue_type: row.issue_type,
+                    description: row.description,
+                    resolution_option: row.resolution_option,
+                    evidence_path: row.issue_evidence_path || row.return_evidence_path,
+                    created_at: row.issue_created_at || row.return_created_at,
+
+                    products: []
+                };
+            }
+            ordersMap[row.order_id].products.push({
+                product_id: row.product_id,
+                product_name: row.product_name,
+                quantity: row.quantity,
+                total: row.total
+            });
+        });
+
+        res.json({ success: true, data: Object.values(ordersMap) });
+    });
+});
+
+// อนุมัติการส่งคืน
+router.put("/approve-return/:returnId", (req, res) => {
+    const { returnId } = req.params;
+    const { expected_delivery_days = 5 } = req.body;
+
+    db.query(
+        `UPDATE order_returns 
+         SET admin_checked = 1, expected_delivery_days = ?, updated_at = NOW() 
+         WHERE return_id = ?`,
+        [expected_delivery_days, returnId],
+        (err, result) => {
+            if (err) return res.status(500).json({ success: false, error: err.message });
+
+            if (result.affectedRows === 0) {
+                return res.status(404).json({ success: false, error: "ไม่พบข้อมูลการคืนสินค้า" });
+            }
+
+            db.query(
+                `SELECT o.order_id, o.user_id 
+                 FROM order_returns r
+                 JOIN order_issues i ON r.issue_id = i.issue_id
+                 JOIN orders o ON i.order_id = o.order_id
+                 WHERE r.return_id = ?`,
+                [returnId],
+                (err, rows) => {
+                    if (err) return res.status(500).json({ success: false, error: err.message });
+                    if (rows.length === 0) {
+                        return res.status(404).json({ success: false, error: "ไม่พบคำสั่งซื้อที่เกี่ยวข้อง" });
+                    }
+
+                    const { order_id, user_id } = rows[0];
+
+                    // อัปเดตสถานะ ordersเป็นreturn_approved
+                    db.query(
+                        `UPDATE orders SET order_status = 'return_approved', update_at = NOW() WHERE order_id = ?`,
+                        [order_id],
+                        (err) => {
+                            if (err) return res.status(500).json({ success: false, error: err.message });
+
+                            // คืนสินค้าเข้าคลัง
+                            db.query(
+                                `SELECT od.product_id, od.quantity FROM order_detail od WHERE od.order_id = ?`,
+                                [order_id],
+                                (err, products) => {
+                                    if (err) console.error("DB error fetching order products:", err);
+
+                                    products.forEach(p => {
+                                        db.query(
+                                            `UPDATE product_slots SET sold = sold - ? WHERE product_id = ? AND sold >= ?`,
+                                            [p.quantity, p.product_id, p.quantity],
+                                            (err) => { if (err) console.error(err); }
+                                        );
+                                    });
+                                }
+                            );
+                            // แจ้งเตือน
+                            const message = "สินค้าได้ส่งคืนสำเร็จ การคืนเงินจะดำเนินการเร็วๆ นี้";
+                            db.query(
+                                `INSERT INTO notifications (user_id, type, message, related_id, send_date, status) 
+                            VALUES (?, 'return_update', ?, ?, NOW(), 'unread')`,
+                                [user_id, message, returnId],
+                                (err) => {
+                                    if (err) return res.status(500).json({ success: false, error: err.message });
+
+                                    return res.json({
+                                        success: true,
+                                        message: "อนุมัติการคืนสินค้าและแจ้งผู้ซื้อเรียบร้อยแล้ว"
+                                    });
+                                }
+                            );
+                        }
+                    );
+                }
+            );
+        }
+    );
+});
+
+// ---------------------แอดมินส่งสินค้าใหม่--------------
+//ส่งสินค้าใหม่
+router.put("/resend/:orderId", (req, res) => {
+    const { orderId } = req.params;
+    const { tracking_number, ship_date } = req.body;
+
+    // อัปเดต order
+    const updateQuery = ` 
+    UPDATE orders 
+    SET order_status = 'resend_processing', tracking_number = ?, shipped_at = ?, update_at = NOW()
+    WHERE order_id = ?
+  `;
+    db.query(updateQuery, [tracking_number, ship_date, orderId], (err) => {
+        if (err) return res.status(500).json({ success: false, error: err.message });
+
+        // ดึง user_id เพื่อส่งแจ้งเตือน
+        db.query("SELECT user_id FROM orders WHERE order_id = ?", [orderId], (err, rows) => {
+            if (err || !rows.length) return res.status(404).json({ success: false, error: "ไม่พบผู้ซื้อ" });
+
+            const userId = rows[0].user_id;
+            const notifyMsg = `สินค้าของคุณถูกส่งใหม่แล้ว กรุณาติดตามสถานะTracking: ${tracking_number}`;
+
+            db.query(
+                "INSERT INTO notifications (user_id, type, message, related_id, send_date, status) VALUES (?, 'resend', ?, ?, NOW(), 'unread')",
+                [userId, notifyMsg, orderId],
+                (err) => {
+                    if (err) return res.status(500).json({ success: false, error: err.message });
+                    res.json({ success: true, message: "ส่งสินค้าใหม่และแจ้งผู้ใช้เรียบร้อยแล้ว" });
+                }
+            );
+        });
+    });
+});
+
+// ยืนยันการคืนเงิน
+router.put("/approve-refund/:issueId", (req, res) => {
+    const { issueId } = req.params;
+    const { refundDays } = req.body;
+
+    db.query(
+        "UPDATE order_issues SET resolution_type='refund', refund_days=? WHERE issue_id=?",
+        [refundDays, issueId],
+        (err) => {
+            if (err) return res.status(500).json({ error: "ไม่สามารถคืนเงินได้" });
+            res.json({ success: true, message: `จะคืนเงินภายใน ${refundDays} วัน กรุณาติดตามการแจ้งจากแอดมิน` });
+        }
+    );
+});
+
+//--------------------จัดการการยกเลิกสินค้า-------------
+// อนุมัติ/ปฏิเสธ
+router.put("/cancel-manage/:orderId", (req, res) => {
+    const { orderId } = req.params;
+    const { action, userId } = req.body; // action = "approve" หรือ "reject"
+
+    let newStatus, messageToUser;
+    if (action === "approve") {
+        newStatus = "repeal_approved";
+
+        // คืนสินค้า
+        db.query("SELECT product_id, quantity FROM order_detail WHERE order_id = ?", [orderId], (err, products) => {
+            if (err) return console.error(err);
+            products.forEach(p => {
+                db.query(
+                    "UPDATE product_slots SET sold = sold - ? WHERE product_id = ? AND sold >= ?",
+                    [p.quantity, p.product_id, p.quantity],
+                    (err) => { if (err) console.error(err); }
+                );
+            });
+        });
+    }
+    else if (action === "reject") {
+        newStatus = "repeal_rejected";
+        messageToUser = `คำขอยกเลิกคำสั่งซื้อ #${orderId} ของคุณถูกปฏิเสธ`;
+    } else {
+        return res.status(400).json({ message: "action ไม่ถูกต้อง" });
+    }
+
+    // อัปเดตสถานะ order
+    const updateOrderQuery = `
+    UPDATE orders 
+    SET order_status = ?, update_at = NOW()
+    WHERE order_id = ?
+  `;
+
+    db.query(updateOrderQuery, [newStatus, orderId], (err) => {
+        if (err) return res.status(500).json({ message: "อัปเดตสถานะไม่สำเร็จ" });
+
+        // แจ้งเตือนผู้ใช้
+        const insertNotifyQuery = `
+      INSERT INTO notifications (user_id, message, type, created_at, is_read)
+      VALUES (?, ?, 'order_cancel_status', NOW(), 0)
+    `;
+
+        db.query(insertNotifyQuery, [userId, messageToUser], (err2) => {
+            if (err2) console.error("แจ้งเตือนไม่สำเร็จ:", err2);
+        });
+
+        return res.json({
+            success: true,
+            message: `คำขอยกเลิกถูก${action === "approve" ? "อนุมัติ" : "ปฏิเสธ"}แล้ว`,
+            newStatus,
+        });
+    });
+});
+
+
+
+
+module.exports = router;
