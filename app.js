@@ -44,8 +44,9 @@ app.set('trust proxy', 1);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use('/img', express.static('img'));
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// app.use('/img', express.static('img'));
+// app.use('/api/uploads', express.static(path.join(__dirname, 'uploads')));
+// app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 app.use(session({
   secret: process.env.SESSION_SECRET || 'secret_key',
@@ -64,6 +65,7 @@ app.use(session({
 
 app.use('/img', express.static(path.join(__dirname, 'img')));
 app.use('/images', express.static(path.join(__dirname, 'img')));
+app.use('/api/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 app.use(passport.initialize());
@@ -128,5 +130,6 @@ app.use(function (err, req, res, next) {
 app.listen(3001, () => {
   console.log(`Server running on port 3001`);
 });
+
 
 module.exports = app;

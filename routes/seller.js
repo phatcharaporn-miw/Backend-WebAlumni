@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const db = require('../db');
-const moment = require('moment');
+// const moment = require('moment');
 const { logManage, logDonation } = require('../logUserAction');
 
 // ตั้งค่า Multer สำหรับอัปโหลดไฟล์
@@ -113,91 +113,174 @@ router.get("/issue-orders", (req, res) => {
 });
 
 // ผู้ขายอัปเดตสถานะคำสั่งซื้อและหักจำนวนสินค้า
-router.post('/orders-status/:orderId', async (req, res) => {
-    const { order_status, tracking_number, transport_company_id } = req.body;
-    const { orderId } = req.params;
-    const sellerId = req.session.user?.user_id;
-    console.log("Session user:", req.session.user);
+// router.post('/orders-status/:orderId', async (req, res) => {
+//     const { order_status, tracking_number, transport_company_id } = req.body;
+//     const { orderId } = req.params;
+//     const sellerId = req.session.user?.user_id;
+//     console.log("Session user:", req.session.user);
 
 
-    try {
-        // ริ่ม Transaction
-        await new Promise((resolve, reject) => {
-            db.beginTransaction(err => {
-                if (err) return reject(err);
-                resolve();
-            });
-        });
+//     try {
+//         // ริ่ม Transaction
+//         await new Promise((resolve, reject) => {
+//             db.beginTransaction(err => {
+//                 if (err) return reject(err);
+//                 resolve();
+//             });
+//         });
 
-        // ตรวจสอบสิทธิ์ผู้ขาย
-        const checkQuery = `
-            SELECT DISTINCT o.order_id 
-            FROM orders o
-            JOIN order_detail od ON o.order_id = od.order_id
-            JOIN products p ON od.product_id = p.product_id
-            WHERE o.order_id = ? AND p.user_id = ?
-        `;
-        const rows = await db.query(checkQuery, [orderId, sellerId]);
-
-
-        // อัปเดตสถานะคำสั่งซื้อ (ตาราง orders)
-        const updateOrderQuery = `
-            UPDATE orders 
-            SET order_status = ?, tracking_number = ?, transport_company_id = ?, update_at = NOW()
-            WHERE order_id = ?
-        `;
-        await db.query(updateOrderQuery, [order_status, tracking_number, transport_company_id, orderId]);
-
-        // อัปเดตสถานะการชำระเงินเป็น 'paid' 
-        const updatePaymentQuery = `
-            UPDATE payment 
-            SET payment_status = 'paid', updated_at = NOW()
-            WHERE order_id = ?
-        `;
-        await db.query(updatePaymentQuery, [orderId]);
+//         // ตรวจสอบสิทธิ์ผู้ขาย
+//         const checkQuery = `
+//             SELECT DISTINCT o.order_id 
+//             FROM orders o
+//             JOIN order_detail od ON o.order_id = od.order_id
+//             JOIN products p ON od.product_id = p.product_id
+//             WHERE o.order_id = ? AND p.user_id = ?
+//         `;
+//         const rows = await db.query(checkQuery, [orderId, sellerId]);
 
 
-        // จัดการหักจำนวนสินค้าใน product_slots (ถ้าสถานะเป็น 'shipping')
-        if (order_status === "shipping") {
-            await deductProductSlots(orderId, sellerId); 
-            await notifyBuyer(orderId, tracking_number); 
-        }
+//         // อัปเดตสถานะคำสั่งซื้อ (ตาราง orders)
+//         const updateOrderQuery = `
+//             UPDATE orders 
+//             SET order_status = ?, tracking_number = ?, transport_company_id = ?, update_at = NOW()
+//             WHERE order_id = ?
+//         `;
+//         await db.query(updateOrderQuery, [order_status, tracking_number, transport_company_id, orderId]);
 
-        // Commit Transaction เมื่อทุกอย่างสำเร็จ
-        await new Promise((resolve, reject) => {
-            db.commit(err => {
-                if (err) return reject(err);
-                resolve();
-            });
-        });
+//         // อัปเดตสถานะการชำระเงินเป็น 'paid' 
+//         const updatePaymentQuery = `
+//             UPDATE payment 
+//             SET payment_status = 'paid', updated_at = NOW()
+//             WHERE order_id = ?
+//         `;
+//         await db.query(updatePaymentQuery, [orderId]);
 
-        res.json({ success: true, message: "อัปเดตสถานะ, การชำระเงิน, และจัดการ slot เรียบร้อย" });
 
-    } catch (error) {
-        // จัดการข้อผิดพลาดและ Rollback
-        await new Promise(resolve => {
-            db.rollback(() => {
-                resolve(); 
-            });
-        });
+//         // จัดการหักจำนวนสินค้าใน product_slots (ถ้าสถานะเป็น 'shipping')
+//         if (order_status === "shipping") {
+//             await deductProductSlots(orderId, sellerId); 
+//             await notifyBuyer(orderId, tracking_number); 
+//         }
+
+//         // Commit Transaction เมื่อทุกอย่างสำเร็จ
+//         await new Promise((resolve, reject) => {
+//             db.commit(err => {
+//                 if (err) return reject(err);
+//                 resolve();
+//             });
+//         });
+
+//         res.json({ success: true, message: "อัปเดตสถานะ, การชำระเงิน, และจัดการ slot เรียบร้อย" });
+
+//     } catch (error) {
+//         // จัดการข้อผิดพลาดและ Rollback
+//         await new Promise(resolve => {
+//             db.rollback(() => {
+//                 resolve(); 
+//             });
+//         });
         
-        console.error("Order Update Error:", error);
+//         console.error("Order Update Error:", error);
         
-        const errorMessage = error.message === "คุณไม่มีสิทธิ์อัปเดตคำสั่งซื้อนี้" 
-                             ? error.message 
-                             : "เกิดข้อผิดพลาดในการทำรายการ";
+//         const errorMessage = error.message === "คุณไม่มีสิทธิ์อัปเดตคำสั่งซื้อนี้" 
+//                              ? error.message 
+//                              : "เกิดข้อผิดพลาดในการทำรายการ";
                              
-        const statusCode = error.message === "คุณไม่มีสิทธิ์อัปเดตคำสั่งซื้อนี้" ? 403 : 500;
+//         const statusCode = error.message === "คุณไม่มีสิทธิ์อัปเดตคำสั่งซื้อนี้" ? 403 : 500;
 
-        res.status(statusCode).json({ 
-            error: errorMessage,
-        });
+//         res.status(statusCode).json({ 
+//             error: errorMessage,
+//         });
+//     }
+// });
+
+// ผู้ขายอัปเดตสถานะคำสั่งซื้อและหักจำนวนสินค้า
+router.post('/orders-status/:orderId', async (req, res) => {
+  const { order_status, tracking_number, transport_company_id } = req.body;
+  const { orderId } = req.params;
+  const sellerId = req.session.user?.user_id;
+
+  if (!sellerId) {
+    return res.status(401).json({ error: "กรุณาเข้าสู่ระบบก่อนทำรายการ" });
+  }
+
+  const connection = await db.promise().getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const [checkRows] = await connection.query(
+      `
+      SELECT DISTINCT o.order_id 
+      FROM orders o
+      JOIN order_detail od ON o.order_id = od.order_id
+      JOIN products p ON od.product_id = p.product_id
+      WHERE o.order_id = ? AND p.user_id = ?
+      `,
+      [orderId, sellerId]
+    );
+
+    if (!checkRows.length) {
+      throw new Error("คุณไม่มีสิทธิ์อัปเดตคำสั่งซื้อนี้");
     }
+
+    // อัปเดตสถานะคำสั่งซื้อในตาราง orders
+    await connection.query(
+      `
+      UPDATE orders 
+      SET order_status = ?, tracking_number = ?, transport_company_id = ?, update_at = NOW()
+      WHERE order_id = ?
+      `,
+      [order_status, tracking_number || null, transport_company_id || null, orderId]
+    );
+
+    // อัปเดตสถานะการชำระเงินเป็น 'paid'
+    await connection.query(
+      `
+      UPDATE payment 
+      SET payment_status = 'paid', updated_at = NOW()
+      WHERE order_id = ?
+      `,
+      [orderId]
+    );
+
+    //ถ้าสถานะเป็น shipping จะหักสินค้าและแจ้งผู้ซื้อ
+    if (order_status === "shipping") {
+      await deductProductSlots(connection, orderId, sellerId); // ส่ง connection เข้าไปด้วย
+      await notifyBuyer(connection, orderId, tracking_number); // ส่ง connection เข้าไปด้วย
+    }
+
+    logOrder(sellerId, orderId, `อัปเดตสถานะคำสั่งซื้อเป็น ${order_status}`);
+
+    await connection.commit();
+
+    res.json({
+      success: true,
+      message: "อัปเดตสถานะ, การชำระเงิน, และจัดการ slot เรียบร้อย"
+    });
+
+  } catch (error) {
+    //Rollback เมื่อมีข้อผิดพลาด
+    await connection.rollback();
+    console.error("Order Update Error:", error);
+
+    const errorMessage = error.message === "คุณไม่มีสิทธิ์อัปเดตคำสั่งซื้อนี้"
+      ? error.message
+      : "เกิดข้อผิดพลาดในการทำรายการ";
+
+    const statusCode = error.message === "คุณไม่มีสิทธิ์อัปเดตคำสั่งซื้อนี้" ? 403 : 500;
+
+    res.status(statusCode).json({ error: errorMessage });
+
+  } finally {
+    connection.release();
+  }
 });
 
+
 // ----------------------------------------------------------------------
-// ฟังก์ชันย่อย 1: หักจำนวนสินค้าจาก Slots (Deduct Logic)
-// ----------------------------------------------------------------------
+// ฟังก์ชันย่อย 1: หักจำนวนสินค้าจาก Slots
 
 async function deductProductSlots(orderId, sellerId) {
     const getItemsQuery = `

@@ -128,11 +128,9 @@ router.get('/all-activity', (req, res) => {
           LIMIT 1
         ) AS image_path,
         COALESCE(end_date, activity_date) AS end_date, -- ใช้ activity_date หาก end_date เป็น NULL
-        start_time, -- เพิ่ม start_time
-        end_time, -- เพิ่ม end_time
-        registration_required,
+        start_time, 
+        end_time, 
         max_participants,
-        batch_restriction,
         department_restriction,
         check_alumni,
         created_at,
@@ -182,9 +180,7 @@ router.get('/:activityId', (req, res) => {
         COALESCE(end_date, activity_date) AS end_date, 
         start_time, 
         end_time,
-        registration_required,
         max_participants,
-        batch_restriction,
         department_restriction,
         check_alumni,
         created_at,
@@ -232,9 +228,7 @@ router.put('/edit-activity/:activityId', LoggedIn, checkActiveUser, upload.array
     end_date,
     start_time,
     end_time,
-    registration_required,
     max_participants,
-    batch_restriction,
     department_restriction,
     check_alumni
   } = req.body;
@@ -243,17 +237,24 @@ router.put('/edit-activity/:activityId', LoggedIn, checkActiveUser, upload.array
   const updateActivity = `
       UPDATE activity SET
         activity_name = ?, activity_date = ?, description = ?, end_date = ?, 
-        start_time = ?, end_time = ?, registration_required = ?, max_participants = ?, 
-        batch_restriction = ?, department_restriction = ?, check_alumni = ?, updated_at = NOW()
+        start_time = ?, end_time = ?, max_participants = ?, 
+        department_restriction = ?, check_alumni = ?, updated_at = NOW()
       WHERE activity_id = ? 
     `;
 
   const activityValues = [
-    activity_name, activity_date, description, end_date,
-    start_time, end_time, registration_required, max_participants,
-    batch_restriction, department_restriction, check_alumni,
-    activityId, userId
-  ];
+  activity_name,
+  activity_date,
+  description,
+  end_date,
+  start_time,
+  end_time,
+  max_participants,
+  department_restriction,
+  check_alumni === '' || check_alumni === undefined ? 0 : check_alumni,
+  activityId,
+  userId
+];
 
   db.query(updateActivity, activityValues, (err, result) => {
     if (err) {

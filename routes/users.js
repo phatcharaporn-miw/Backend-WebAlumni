@@ -13,8 +13,8 @@ const dbQuery = util.promisify(db.query).bind(db); // แปลง db.query เ�
 const upload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => {
-      // เก็บไฟล์ในโฟลเดอร์ img ที่อยู่ใน root ของโปรเจกต์
-      cb(null, path.join(__dirname, '..', 'img'));
+      // เก็บไฟล์ในโฟลเดอร์ uploads ที่อยู่ใน root ของโปรเจกต์
+      cb(null, path.join(__dirname, '..', 'uploads'));
     },
     filename: (req, file, cb) => {
       // ใช้ชื่อไฟล์เดิม
@@ -125,8 +125,11 @@ router.get('/profile', LoggedIn, checkActiveUser, (req, res) => {
           line: userProfile.line,
           image_path: userProfile.image_path, 
           profilePicture: userProfile.image_path 
-            ? `http://localhost:3001/${userProfile.image_path.replace(/^\/+/, '')}` 
-            : 'http://localhost:3001/uploads/default-profile.png',
+            ? `http://10.198.200.71/api/${userProfile.image_path.replace(/^\/+/, '')}` 
+            : 'http://10.198.200.71/api/uploads/default-profile.png',
+  //  profilePicture: userProfile.image_path 
+  // ? `http://10.198.200.71/${userProfile.image_path.replace(/^\/+/, '')}` 
+  // : 'http://10.198.200.71/api/uploads/default-profile.png',
           role: userProfile.role_id,
           educations: educationResults.map(edu => ({
             education_id: edu.education_id,
@@ -311,7 +314,7 @@ router.post('/edit-profile', (req, res) => {
 router.post('/update-profile-image', upload.single('image_path'), async (req, res) => {
   // const userId = req.body.user_id;
   const user_id = req.session.user?.user_id;
-  const image_path = `img/${req.file.filename}`;
+  const image_path = `uploads/${req.file.filename}`;
 
   // if (!user_id || !image_path) {
   //   return res.status(400).json({ message: 'ข้อมูลไม่ครบถ้วน' });

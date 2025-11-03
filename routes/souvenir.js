@@ -215,56 +215,6 @@ route.delete("/user/shippingAddress/:id", async (req, res) => {
 });
 
 // ดึงข้อมูลสินค้าทั้งหมด
-// route.get('/', (req, res) => {
-//     const query = `
-//     SELECT 
-//         p.product_id,
-//         p.product_name,
-//         p.description,
-//         p.price,
-//         p.image,
-//         r.role_id,
-//         COALESCE(SUM(ps.quantity - ps.sold - ps.reserved - IFNULL(pending.total_pending, 0)), 0) AS available_stock
-//     FROM products p
-//     JOIN users u ON p.user_id = u.user_id
-//     JOIN role r ON u.role_id = r.role_id
-//     LEFT JOIN product_slots ps 
-//         ON p.product_id = ps.product_id AND ps.status = 'active'
-//     LEFT JOIN (
-//         SELECT od.product_id, SUM(od.quantity) AS total_pending
-//         FROM order_detail od
-//         JOIN orders o ON od.order_id = o.order_id
-//         WHERE o.order_status = 'pending_verification'
-//         GROUP BY od.product_id
-//     ) AS pending
-//         ON pending.product_id = p.product_id
-//     WHERE p.status = "1"
-//     GROUP BY p.product_id
-// `;
-
-//     // ps.quantity → จำนวนสินค้าทั้งหมดในล็อต
-//     // ps.sold → จำนวนสินค้าที่ขายแล้ว (confirmed)
-//     // ps.reserved → จำนวนสินค้าที่อยู่ในตะกร้า
-//     // pending.total_pending → จำนวนสินค้าที่อยู่ใน order รอ admin confirm
-//     // SUM(...) → ถ้ามีหลายล็อตรวมกัน
-//     // COALESCE(..., 0) → ถ้า NULL ให้เป็น 0
-
-//     db.query(query, (err, results) => {
-//         if (err) {
-//             console.error('Database query failed:', err);
-//             return res.status(500).json({ error: 'Database query failed' });
-//         }
-
-//         const products = results.map(item => ({
-//             ...item,
-//             is_sold_out: item.available_stock <= 0  //หน้าเว็บจะแสดง “สินค้าหมด”
-//         }));
-
-//         res.json(products);
-//     });
-// });
-
-// ดึงข้อมูลสินค้าทั้งหมด
 route.get('/', (req, res) => {
     const query = `
     SELECT 
@@ -308,6 +258,45 @@ route.get('/', (req, res) => {
         res.json(products);
     });
 });
+
+// ยอดขายสินค้าทั้งหมด
+route.get('/summary-all', (req, res) => {
+    const query = `
+        SELECT 
+            p.product_id,
+            p.product_name,
+            p.price,
+            SUM(od.quantity) AS total_sold_quantity,
+            SUM(od.total) AS total_sales_amount
+        FROM products p
+        JOIN order_detail od ON p.product_id = od.product_id
+        JOIN orders o ON od.order_id = o.order_id
+        WHERE o.order_status = 'delivered'  -- เฉพาะออเดอร์ที่ขายสำเร็จ
+        GROUP BY p.product_id
+        ORDER BY total_sales_amount DESC;
+    `;
+
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error('Database query failed:', err);
+            return res.status(500).json({ error: 'Database query failed' });
+        }
+
+        const formattedResults = results.map(item => ({
+            product_id: item.product_id,
+            product_name: item.product_name,
+            price: item.price,
+            total_sold_quantity: item.total_sold_quantity || 0,
+            total_sales_amount: item.total_sales_amount || 0
+        }));
+
+        res.json({
+            success: true,
+            data: formattedResults
+        });
+    });
+});
+
 
 
 // ดึงรายละเอียดของสินค้า
@@ -401,153 +390,11 @@ route.get('/pending-requests', (req, res) => {
     });
 });
 
-// เพิ่มสินค้า
-// route.post('/addsouvenir', upload.single('image'), (req, res) => {
-//     const { productName, description, price, quantity, paymentMethod,
-//         bankName, accountNumber, accountName, promptpayNumber, start_date, end_date, slot_name } = req.body;
-//     const user_id = req.session.user?.id;
-//     const image = req.file ? req.file.filename : null;
-
-//     if (!image) {
-//         return res.status(400).json({ error: 'Image is required' });
-//     }
-
-//     if (!productName || !description || !price || !quantity || !paymentMethod ||
-//         !bankName || !accountNumber || !accountName || !slot_name) {
-//         return res.status(400).json({ error: 'ต้องกรอกข้อมูลทุกช่องให้ครบถ้วน' });
-//     }
-
-//     db.beginTransaction((err) => {
-//         if (err) {
-//             return res.status(500).json({ error: 'Failed to start transaction' });
-//         }
-
-//         const queryPayment = `
-//             INSERT INTO payment_methods 
-//             (method_name, bank_name, account_name, account_number, promptpay_number) 
-//             VALUES (?, ?, ?, ?, ?)
-//         `;
-//         const valuesPayment = [
-//             paymentMethod,
-//             bankName,
-//             accountName,
-//             accountNumber,
-//             promptpayNumber
-//         ];
-
-//         db.query(queryPayment, valuesPayment, (err, result) => {
-//             if (err) {
-//                 return db.rollback(() => {
-//                     return res.status(500).json({ error: 'Error inserting payment method' });
-//                 });
-//             }
-
-//             const payment_method_id = result.insertId;
-
-//             //ตรวจสอบ role เพื่อกำหนด is_official
-//             const isOfficial = (user.role_id === 1 || user.role_id === 2) ? 1 : 0;
-
-//             const queryProduct = `
-//                 INSERT INTO products 
-//                 (product_name, description, image, price, user_id, status, payment_method_id, is_official) 
-//                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-//             `;
-//             const valuesProduct = [
-//                 productName,
-//                 description,
-//                 image,
-//                 price,
-//                 user_id,
-//                 "0",  // ยังไม่อนุมัติ
-//                 payment_method_id,
-//                 isOfficial
-//             ];
-
-//             db.query(queryProduct, valuesProduct, (err, result) => {
-//                 if (err) {
-//                     return db.rollback(() => {
-//                         db.query(`DELETE FROM payment_methods WHERE payment_method_id = ?`, [payment_method_id]);
-//                         return res.status(500).json({ error: 'Error inserting product' });
-//                     });
-//                 }
-
-//                 const product_id = result.insertId;
-
-//                 // เพิ่ม slot ให้สินค้า
-//                 const querySlot = `
-//                     INSERT INTO product_slots 
-//                     (product_id, slot_name, quantity, sold, reserved, start_date, end_date, status, created_at)
-//                     VALUES (?, ?, ?, 0, 0, ?, ?, 'active', NOW())
-//                 `;
-//                 db.query(querySlot, [product_id, slot_name, quantity, start_date, end_date], (err) => {
-//                     if (err) {
-//                         return db.rollback(() => {
-//                             return res.status(500).json({ error: 'Error inserting product slot' });
-//                         });
-//                     }
-
-//                     // เพิ่มแจ้งเตือนหลังจากเพิ่มสินค้า
-//                     db.query(`SELECT user_id FROM users WHERE role_id IN (1, 2)`, (err, resultUsers) => {
-//                         if (err) {
-//                             return db.rollback(() => {
-//                                 return res.status(500).json({ error: 'Failed to fetch target users for notification' });
-//                             });
-//                         }
-
-//                         const notifications = resultUsers.map(row => [
-//                             row.user_id,
-//                             'souvenir_request',
-//                             `มีคำขอขายของที่ระลึก: ${productName}`
-//                         ]);
-
-//                         if (notifications.length > 0) {
-//                             db.query(
-//                                 `INSERT INTO notifications (user_id, type, message)
-//                                  VALUES ? 
-//                                  ON DUPLICATE KEY UPDATE 
-//                                  message = VALUES(message),
-//                                  send_date = NOW(),
-//                                  status = 'ยังไม่อ่าน';`,
-//                                 [notifications],
-//                                 (err) => {
-//                                     if (err) {
-//                                         return db.rollback(() => {
-//                                             return res.status(500).json({ error: 'Failed to insert notifications' });
-//                                         });
-//                                     }
-
-//                                     db.commit(err => {
-//                                         if (err) {
-//                                             return db.rollback(() => {
-//                                                 return res.status(500).json({ error: 'Failed to commit transaction' });
-//                                             });
-//                                         }
-//                                         return res.status(200).json({ message: 'Product, slot, payment method, and notifications added successfully' });
-//                                     });
-//                                 }
-//                             );
-//                         } else {
-//                             db.commit((err) => {
-//                                 if (err) {
-//                                     return db.rollback(() => {
-//                                         return res.status(500).json({ error: 'Failed to commit transaction' });
-//                                     });
-//                                 }
-//                                 return res.status(200).json({ message: 'Product and slot added (no users to notify)' });
-//                             });
-//                         }
-//                     });
-//                 });
-//             });
-//         });
-//     });
-// });
-
 // เพิ่มสินค้าอันใหม่ 
 route.post('/addsouvenir', upload.single('image'), (req, res) => {
     const { productName, description, price, quantity, paymentMethod,
         bankName, accountNumber, accountName, promptpayNumber, start_date, end_date, slot_name } = req.body;
-    const user = req.session.user; 
+    const user = req.session.user;
     const user_id = user?.id;
     const image = req.file ? req.file.filename : null;
 
@@ -743,398 +590,298 @@ route.get('/cart/count', (req, res) => {
 // อันใหม่
 // เพิ่มสินค้าลงตะกร้า
 route.post('/cart/add', (req, res) => {
-    const {product_id, quantity } = req.body;
+    const { product_id, quantity } = req.body;
     const user_id = req.session.user?.id;
 
     if (!user_id || !product_id || !quantity) {
         return res.status(400).json({ message: "ข้อมูลไม่ครบถ้วนหรือไม่ถูกต้อง" });
     }
 
-    db.beginTransaction(err => {
-        if (err) return res.status(500).json({ message: "ไม่สามารถเริ่ม transaction ได้" });
+    db.getConnection((err, connection) => {
+        if (err) return res.status(500).json({ message: "ไม่สามารถเชื่อมต่อฐานข้อมูลได้" });
 
-        db.query(`SELECT price FROM products WHERE product_id = ?`, [product_id], (err, productRows) => {
-            if (err) return db.rollback(() => res.status(500).json({ message: "เกิดข้อผิดพลาดในการค้นหาสินค้า" }));
-            if (!productRows || productRows.length === 0) return db.rollback(() => res.status(400).json({ message: "ไม่พบสินค้า" }));
+        connection.beginTransaction(err => {
+            if (err) {
+                connection.release();
+                return res.status(500).json({ message: "ไม่สามารถเริ่ม transaction ได้" });
+            }
 
-            const { price } = productRows[0];
-            const total = price * quantity;
+            connection.query(`SELECT price FROM products WHERE product_id = ?`, [product_id], (err, productRows) => {
+                if (err) return rollback("เกิดข้อผิดพลาดในการค้นหาสินค้า");
+                if (!productRows.length) return rollback("ไม่พบสินค้า");
 
-            db.query(
-                `SELECT slot_id, quantity, sold, reserved 
-                 FROM product_slots 
-                 WHERE product_id = ? AND status = 'active' 
-                 AND (start_date <= NOW() AND (end_date IS NULL OR end_date >= NOW()))
-                 ORDER BY start_date ASC LIMIT 1`,
-                [product_id],
-                (err, slotRows) => {
-                    if (err) return db.rollback(() => res.status(500).json({ message: "เกิดข้อผิดพลาดในการค้นหาสล็อต" }));
-                    if (!slotRows || slotRows.length === 0) return db.rollback(() => res.status(400).json({ message: "สินค้าหมดหรือไม่มีสล็อตที่ใช้งานได้" }));
+                const { price } = productRows[0];
+                const total = price * quantity;
 
-                    const slot = slotRows[0];
-                    const available = slot.quantity - slot.sold - slot.reserved;
+                connection.query(
+                    `SELECT slot_id, quantity, sold, reserved 
+           FROM product_slots 
+           WHERE product_id = ? AND status = 'active' 
+           AND (start_date <= NOW() AND (end_date IS NULL OR end_date >= NOW()))
+           ORDER BY start_date ASC LIMIT 1`,
+                    [product_id],
+                    (err, slotRows) => {
+                        if (err) return rollback("เกิดข้อผิดพลาดในการค้นหาสล็อต");
+                        if (!slotRows.length) return rollback("สินค้าหมดหรือไม่มีสล็อตที่ใช้งานได้");
 
-                    if (available < quantity) {
-                        return db.rollback(() => res.status(400).json({
-                            message: `จำนวนสินค้าไม่พอในสต็อก (คงเหลือ ${available} ชิ้น)`
-                        }));
-                    }
-
-                    // เพิ่มหรืออัปเดต cart
-                    db.query(`SELECT quantity FROM cart WHERE user_id = ? AND product_id = ? FOR UPDATE`, [user_id, product_id], (err, cartRows) => {
-                        if (err) return db.rollback(() => res.status(500).json({ message: "เกิดข้อผิดพลาดในการค้นหาตะกร้า" }));
-
-                        let newQuantity = quantity;
-                        let newTotal = total;
-                        if (cartRows && cartRows.length > 0) {
-                            newQuantity += cartRows[0].quantity;
-                            newTotal = price * newQuantity;
-                            db.query(
-                                `UPDATE cart SET quantity = ?, total = ? WHERE user_id = ? AND product_id = ?`,
-                                [newQuantity, newTotal, user_id, product_id],
-                                afterCartUpdate
-                            );
-                        } else {
-                            db.query(
-                                `INSERT INTO cart (user_id, product_id, quantity, total) VALUES (?, ?, ?, ?)`,
-                                [user_id, product_id, quantity, total],
-                                afterCartUpdate
-                            );
+                        const slot = slotRows[0];
+                        const available = slot.quantity - slot.sold - slot.reserved;
+                        if (available < quantity) {
+                            return rollback(`จำนวนสินค้าไม่พอ (คงเหลือ ${available} ชิ้น)`);
                         }
 
-                        function afterCartUpdate(err) {
-                            if (err) return db.rollback(() => res.status(500).json({ message: "เกิดข้อผิดพลาดในการอัปเดตตะกร้า" }));
+                        connection.query(
+                            `SELECT quantity FROM cart WHERE user_id = ? AND product_id = ? FOR UPDATE`,
+                            [user_id, product_id],
+                            (err, cartRows) => {
+                                if (err) return rollback("เกิดข้อผิดพลาดในการค้นหาตะกร้า");
 
-                            // อัปเดต reserved ใน slot
-                            db.query(
-                                `UPDATE product_slots 
-                                 SET reserved = reserved + ?,
-                                     status = CASE WHEN sold + reserved + ? >= quantity THEN 'ended' ELSE 'active' END
-                                 WHERE slot_id = ?`,
-                                [quantity, quantity, slot.slot_id],
-                                (err) => {
-                                    if (err) return db.rollback(() => res.status(500).json({ message: "เกิดข้อผิดพลาดในการอัปเดตสล็อต" }));
+                                let newQuantity = quantity;
+                                let newTotal = total;
+                                const afterCartUpdate = (err) => {
+                                    if (err) return rollback("อัปเดตตะกร้าล้มเหลว");
 
-                                    // เปิดล็อตถัดไปอัตโนมัติ ถ้ามี
-                                    db.query(
-                                        `UPDATE product_slots
-                                        SET status = 'active'
-                                        WHERE product_id = ? AND status = 'pending'
-                                        ORDER BY start_date ASC
-                                        LIMIT 1`,
-                                        [product_id],
-                                        (errNext) => {
-                                            if (errNext) console.error("เปิดล็อตถัดไปล้มเหลว", errNext);
-                                        });
+                                    connection.query(
+                                        `UPDATE product_slots 
+                     SET reserved = reserved + ?,
+                         status = CASE WHEN sold + reserved + ? >= quantity THEN 'ended' ELSE 'active' END
+                     WHERE slot_id = ?`,
+                                        [quantity, quantity, slot.slot_id],
+                                        (err) => {
+                                            if (err) return rollback("อัปเดตสล็อตล้มเหลว");
 
+                                            connection.commit(err => {
+                                                if (err) return rollback("commit ล้มเหลว");
 
-                                    // เช็คสต็อกเหลือน้อย
-                                    const available = slot.quantity - slot.sold - (slot.reserved + quantity);
-                                    if (available <= 5) {
-                                        // แจ้งเตือนแอดมิน
-                                        db.query(
-                                            `SELECT product_name FROM products WHERE product_id = ?`,
-                                            [product_id],
-                                            (err, prodRows) => {
-                                                const productName = prodRows && prodRows.length > 0 ? prodRows[0].product_name : `ID:${product_id}`;
-                                                db.query(
-                                                    `SELECT user_id FROM users WHERE role_id = 1 AND is_active = 1`,
-                                                    (err, admins) => {
-                                                        if (!err && admins.length > 0) {
-                                                            const message = `ล็อตสินค้า ${slot.slot_name} ของ "${productName}" คงเหลือ ${available} ชิ้น`;
-                                                            admins.forEach(admin => {
-                                                                db.query(
-                                                                    `INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
-                                                                        VALUES (?, 'stock', ?, ?, NOW(), 'ยังไม่อ่าน')
-                                                                        ON DUPLICATE KEY UPDATE 
-                                                                            message = VALUES(message),
-                                                                            send_date = NOW(),
-                                                                            status = 'ยังไม่อ่าน';`,
-                                                                    [admin.user_id, message, slot.slot_id]
-                                                                );
-                                                            });
-                                                        }
-                                                    }
-                                                );
-                                            }
-                                        );
-                                    }
+                                                connection.release();
+                                                return res.json({ message: "เพิ่มสินค้าลงตะกร้าสำเร็จ", cartCount: newQuantity });
+                                            });
+                                        }
+                                    );
+                                };
 
-                                    db.commit(err => {
-                                        if (err) return db.rollback(() => res.status(500).json({ message: "เกิดข้อผิดพลาดในการบันทึก transaction" }));
-                                        res.json({
-                                            message: "เพิ่มสินค้าลงตะกร้าสำเร็จ",
-                                            cartCount: newQuantity
-                                        });
-                                    });
+                                if (cartRows.length > 0) {
+                                    newQuantity += cartRows[0].quantity;
+                                    newTotal = price * newQuantity;
+                                    connection.query(
+                                        `UPDATE cart SET quantity = ?, total = ? WHERE user_id = ? AND product_id = ?`,
+                                        [newQuantity, newTotal, user_id, product_id],
+                                        afterCartUpdate
+                                    );
+                                } else {
+                                    connection.query(
+                                        `INSERT INTO cart (user_id, product_id, quantity, total) VALUES (?, ?, ?, ?)`,
+                                        [user_id, product_id, quantity, total],
+                                        afterCartUpdate
+                                    );
                                 }
-                            );
-                        }
-                    });
-                }
-            );
+                            }
+                        );
+                    }
+                );
+            });
+
+            // ฟังก์ชัน rollback กลาง
+            function rollback(msg) {
+                connection.rollback(() => {
+                    connection.release();
+                    res.status(500).json({ message: msg });
+                });
+            }
         });
     });
 });
 
+
 // อัปเดตจำนวนสินค้าในตะกร้า
-route.put('/cart/update', (req, res) => {
-    const {product_id, quantity } = req.body;
+route.put("/cart/update", (req, res) => {
+    const { product_id, quantity } = req.body;
     const user_id = req.session.user?.id;
 
     if (!user_id || !product_id || !Number.isInteger(quantity) || quantity < 1) {
         return res.status(400).json({ message: "ข้อมูลไม่ครบถ้วนหรือไม่ถูกต้อง" });
     }
 
-    console.log(`Cart update request: User=${user_id}, Product=${product_id}, Quantity=${quantity}`);
-
-    db.beginTransaction(err => {
+    db.getConnection((err, connection) => {
         if (err) {
-            console.error("Error starting transaction:", err);
-            return res.status(500).json({ message: "ไม่สามารถเริ่ม transaction ได้" });
+            console.error("Error getting connection from pool:", err);
+            return res.status(500).json({ message: "ไม่สามารถเชื่อมต่อฐานข้อมูลได้" });
         }
 
-        // ดึงข้อมูลสินค้า
-        db.query(`SELECT price, product_name FROM products WHERE product_id = ?`, [product_id], (err, productRows) => {
+        connection.beginTransaction(err => {
             if (err) {
-                console.error("Error fetching product:", err);
-                return db.rollback(() => res.status(500).json({ message: "เกิดข้อผิดพลาดในการค้นหาสินค้า" }));
-            }
-            if (!productRows || productRows.length === 0) {
-                return db.rollback(() => res.status(400).json({ message: "ไม่พบสินค้า" }));
+                connection.release();
+                return res.status(500).json({ message: "ไม่สามารถเริ่ม transaction ได้" });
             }
 
-            const { price, product_name } = productRows[0];
-            const total = price * quantity;
-            //console.log(`Product found: ${product_name}, Price: ${price}`);
-
-            // ดึงข้อมูลสล็อต
-            db.query(
-                `SELECT slot_id, slot_name, quantity, sold, reserved 
-                 FROM product_slots 
-                 WHERE product_id = ? AND status = 'active' 
-                 AND (start_date <= NOW() AND (end_date IS NULL OR end_date >= NOW()))
-                 ORDER BY start_date ASC LIMIT 1`,
+            // 1. ดึงข้อมูลสินค้า
+            connection.query(
+                `SELECT price, product_name FROM products WHERE product_id = ?`,
                 [product_id],
-                (err, slotRows) => {
+                (err, productRows) => {
                     if (err) {
-                        console.error("Error fetching slot:", err);
-                        return db.rollback(() => res.status(500).json({ message: "เกิดข้อผิดพลาดในการค้นหาสล็อต" }));
+                        return connection.rollback(() => {
+                            connection.release();
+                            res.status(500).json({ message: "เกิดข้อผิดพลาดในการค้นหาสินค้า" });
+                        });
                     }
-                    if (!slotRows || slotRows.length === 0) {
-                        return db.rollback(() => res.status(400).json({ message: "ไม่มีสล็อตที่ใช้งานได้สำหรับสินค้านี้" }));
+
+                    if (!productRows.length) {
+                        return connection.rollback(() => {
+                            connection.release();
+                            res.status(400).json({ message: "ไม่พบสินค้า" });
+                        });
                     }
 
-                    const slot = slotRows[0];
+                    const { price, product_name } = productRows[0];
+                    const total = price * quantity;
 
-                    // ดึงข้อมูลตะกร้าปัจจุบัน
-                    db.query(`SELECT quantity FROM cart WHERE user_id = ? AND product_id = ? FOR UPDATE`, [user_id, product_id], (err, cartRows) => {
-                        if (err) {
-                            console.error("Error fetching cart:", err);
-                            return db.rollback(() => res.status(500).json({ message: "เกิดข้อผิดพลาดในการค้นหาตะกร้า" }));
-                        }
-                        if (!cartRows || cartRows.length === 0) {
-                            return db.rollback(() => res.status(400).json({ message: "ไม่พบสินค้าในตะกร้า" }));
-                        }
+                    // 2. ดึงข้อมูล slot
+                    connection.query(
+                        `SELECT slot_id, slot_name, quantity, sold, reserved 
+             FROM product_slots 
+             WHERE product_id = ? AND status = 'active' 
+             AND (start_date <= NOW() AND (end_date IS NULL OR end_date >= NOW()))
+             ORDER BY start_date ASC LIMIT 1`,
+                        [product_id],
+                        (err, slotRows) => {
+                            if (err) {
+                                return connection.rollback(() => {
+                                    connection.release();
+                                    res.status(500).json({ message: "เกิดข้อผิดพลาดในการค้นหาสล็อต" });
+                                });
+                            }
 
-                        const prevQty = cartRows[0].quantity;
-                        const diff = quantity - prevQty;
-                        console.log(`Cart update - Previous: ${prevQty}, New: ${quantity}, Difference: ${diff}`);
+                            if (!slotRows.length) {
+                                return connection.rollback(() => {
+                                    connection.release();
+                                    res.status(400).json({ message: "ไม่มีสล็อตที่ใช้งานได้สำหรับสินค้านี้" });
+                                });
+                            }
 
-                        // ตรวจสอบ stock
-                        const available = slot.quantity - slot.sold - slot.reserved;
-                        if (available < diff) {
-                            // console.log(`Insufficient stock - Available: ${available}, Requested diff: ${diff}`);
-                            return db.rollback(() => res.status(400).json({
-                                message: `จำนวนสินค้าไม่พอในสล็อต (คงเหลือ ${available} ชิ้น)`
-                            }));
-                        }
+                            const slot = slotRows[0];
 
-                        // อัปเดตตะกร้า
-                        db.query(
-                            `UPDATE cart SET quantity = ?, total = ?, updated_at = NOW() WHERE user_id = ? AND product_id = ?`,
-                            [quantity, total, user_id, product_id],
-                            (err, cartResult) => {
-                                if (err) {
-                                    console.error("Error updating cart:", err);
-                                    return db.rollback(() => res.status(500).json({ message: "เกิดข้อผิดพลาดในการอัปเดตตะกร้า" }));
-                                }
+                            // 3. ดึงข้อมูลในตะกร้าปัจจุบัน
+                            connection.query(
+                                `SELECT quantity FROM cart WHERE user_id = ? AND product_id = ? FOR UPDATE`,
+                                [user_id, product_id],
+                                (err, cartRows) => {
+                                    if (err) {
+                                        return connection.rollback(() => {
+                                            connection.release();
+                                            res.status(500).json({ message: "เกิดข้อผิดพลาดในการค้นหาตะกร้า" });
+                                        });
+                                    }
 
-                                console.log(`Cart updated successfully for user ${user_id}, product ${product_id}`);
+                                    if (!cartRows.length) {
+                                        return connection.rollback(() => {
+                                            connection.release();
+                                            res.status(400).json({ message: "ไม่พบสินค้าในตะกร้า" });
+                                        });
+                                    }
 
-                                // คำนวณ reserved ใหม่
-                                db.query(
-                                    `SELECT SUM(quantity) AS totalReserved FROM cart WHERE product_id = ?`,
-                                    [product_id],
-                                    (err, sumRows) => {
-                                        if (err) {
-                                            console.error("Error calculating total reserved:", err);
-                                            return db.rollback(() => res.status(500).json({ message: "เกิดข้อผิดพลาดในการคำนวณ reserved" }));
-                                        }
+                                    const prevQty = cartRows[0].quantity;
+                                    const diff = quantity - prevQty;
 
-                                        const newTotalReserved = sumRows[0]?.totalReserved || 0;
-                                        console.log(`Calculated total reserved for product ${product_id}: ${newTotalReserved}`);
+                                    const available = slot.quantity - slot.sold - slot.reserved;
+                                    if (available < diff) {
+                                        return connection.rollback(() => {
+                                            connection.release();
+                                            res.status(400).json({
+                                                message: `จำนวนสินค้าไม่พอในสล็อต (คงเหลือ ${available} ชิ้น)`
+                                            });
+                                        });
+                                    }
 
-                                        // อัปเดตสล็อต
-                                        db.query(
-                                            `UPDATE product_slots 
-                                            SET reserved = ?, 
-                                                status = CASE WHEN sold + ? >= quantity THEN 'inactive' ELSE 'active' END,
-                                                updated_at = NOW()
-                                            WHERE slot_id = ?`,
-                                            [newTotalReserved, newTotalReserved, slot.slot_id],
-                                            (err, slotResult) => {
-                                                if (err) {
-                                                    console.error("Error updating slot:", err, {
-                                                        newTotalReserved,
-                                                        slot_id: slot.slot_id,
-                                                        sql_values: [newTotalReserved, newTotalReserved, slot.slot_id]
-                                                    });
-                                                    return db.rollback(() => res.status(500).json({ message: "เกิดข้อผิดพลาดในการอัปเดตสล็อต" }));
-                                                }
+                                    // 4. อัปเดตตะกร้า
+                                    connection.query(
+                                        `UPDATE cart 
+                                        SET quantity = ?, total = ?, updated_at = NOW() 
+                                        WHERE user_id = ? AND product_id = ?`,
+                                        [quantity, total, user_id, product_id],
+                                        (err) => {
+                                            if (err) {
+                                                return connection.rollback(() => {
+                                                    connection.release();
+                                                    res.status(500).json({ message: "เกิดข้อผิดพลาดในการอัปเดตตะกร้า" });
+                                                });
+                                            }
 
-                                                console.log(`Slot updated successfully - Reserved: ${newTotalReserved}`);
-                                                const newRemaining = slot.quantity - slot.sold - newTotalReserved;
-
-                                                // เปิดล็อตถัดไปอัตโนมัติ ถ้ามีล็อต pending
-                                                db.query(
-                                                    `UPDATE product_slots
-                                                    SET status = 'active'
-                                                    WHERE product_id = ? AND status = 'pending'
-                                                    ORDER BY start_date ASC
-                                                    LIMIT 1`,
-                                                    [product_id],
-                                                    (errNext) => {
-                                                        if (errNext) console.error("เปิดล็อตถัดไปล้มเหลว", errNext);
-                                                    }
-                                                );
-
-                                                // ส่วนแจ้งเตือน admin (ทำให้ปลอดภัยขึ้น)
-                                                const sendLowStockAlert = () => {
-                                                    if (newRemaining <= 5 && newRemaining >= 0) {
-                                                        db.query(
-                                                            `SELECT user_id FROM users WHERE role_id = 1 AND is_active = 1`,
-                                                            (err, admins) => {
-                                                                if (!err && admins && admins.length > 0) {
-                                                                    const alertMessage = `สล็อตสินค้า "${slot.slot_name || 'ไม่ระบุ'}" ของ "${product_name}" คงเหลือ ${newRemaining} ชิ้น`;
-
-                                                                    admins.forEach(admin => {
-                                                                        db.query(
-                                                                            `INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
-                                                                             VALUES (?, 'stock', ?, ?, NOW(), 'ยังไม่อ่าน')
-                                                                             ON DUPLICATE KEY UPDATE 
-                                                                                 message = VALUES(message),
-                                                                                 send_date = NOW(),
-                                                                                 status = 'ยังไม่อ่าน'`,
-                                                                            [admin.user_id, alertMessage, slot.slot_id],
-                                                                            (err) => {
-                                                                                if (err) console.error("Error creating notification:", err);
-                                                                            }
-                                                                        );
-                                                                    });
-                                                                }
-                                                            }
-                                                        );
-                                                    }
-                                                };
-
-                                                // ส่วน logging (ทำให้ปลอดภัยขึ้น)
-                                                // const logAction = (callback) => {
-                                                //     if (typeof logOrder === 'function') {
-                                                //         logOrder(user_id, null, `อัปเดตจำนวนสินค้า "${product_name}" ในตะกร้าจาก ${prevQty} เป็น ${quantity} ชิ้น`, callback);
-                                                //     } else {
-                                                //         console.log(`Log: User ${user_id} updated ${product_name} from ${prevQty} to ${quantity}`);
-                                                //         callback();
-                                                //     }
-                                                // };
-
-                                                // ดึงข้อมูลตะกร้าทั้งหมด
-                                                db.query(
-                                                    `SELECT 
-                                                        c.product_id,
-                                                        c.quantity,
-                                                        c.total,
-                                                        p.product_name,
-                                                        p.price,
-                                                        p.image
-                                                    FROM cart c
-                                                    JOIN products p ON c.product_id = p.product_id
-                                                    WHERE c.user_id = ?
-                                                    ORDER BY c.updated_at DESC`,
-                                                    [user_id],
-                                                    (err, allCartItems) => {
-                                                        // ไม่ให้ error ตรงนี้หยุดการทำงาน
-                                                        if (err) {
-                                                            console.error("Error fetching all cart items (non-critical):", err);
-                                                            allCartItems = null;
-                                                        }
-
-                                                        // เรียกส่วน notification และ logging แบบ async
-                                                        sendLowStockAlert();
-
-                                                        // logAction((logErr) => {
-                                                        //     if (logErr) console.error("Error logging action:", logErr);
-                                                        // });
-
-                                                        // คำนวณสรุปตะกร้า
-                                                        let cartSummary = null;
-                                                        if (allCartItems && allCartItems.length > 0) {
-                                                            const totalItems = allCartItems.reduce((sum, item) => sum + parseInt(item.quantity || 0), 0);
-                                                            const totalAmount = allCartItems.reduce((sum, item) => sum + parseFloat(item.total || 0), 0);
-
-                                                            cartSummary = {
-                                                                total_items: totalItems,
-                                                                total_amount: totalAmount,
-                                                                item_count: allCartItems.length,
-                                                                items: allCartItems
-                                                            };
-                                                        }
-
-                                                        // Commit transaction
-                                                        db.commit(err => {
-                                                            if (err) {
-                                                                console.error("Error committing transaction:", err);
-                                                                return db.rollback(() => res.status(500).json({ message: "เกิดข้อผิดพลาดในการบันทึกการเปลี่ยนแปลง" }));
-                                                            }
-
-                                                            // console.log(`Transaction committed successfully`);
-
-                                                            // ส่ง response
-                                                            const responseData = {
-                                                                success: true,
-                                                                message: "อัปเดตจำนวนสินค้าในตะกร้าสำเร็จ",
-                                                                updated_item: {
-                                                                    product_id,
-                                                                    product_name,
-                                                                    quantity,
-                                                                    total,
-                                                                    price_per_unit: price
-                                                                },
-                                                                stock_remaining: newRemaining,
-                                                                stock_reserved: newTotalReserved,
-                                                                cart_summary: cartSummary
-                                                            };
-
-                                                            // console.log(`Sending success response`);
-                                                            res.json(responseData);
+                                            // 5. อัปเดต reserved ใหม่
+                                            connection.query(
+                                                `SELECT SUM(quantity) AS totalReserved FROM cart WHERE product_id = ?`,
+                                                [product_id],
+                                                (err, sumRows) => {
+                                                    if (err) {
+                                                        return connection.rollback(() => {
+                                                            connection.release();
+                                                            res.status(500).json({ message: "เกิดข้อผิดพลาดในการคำนวณ reserved" });
                                                         });
                                                     }
-                                                );
-                                            }
-                                        );
-                                    }
-                                );
-                            }
-                        );
-                    });
+
+                                                    const newTotalReserved = sumRows[0]?.totalReserved || 0;
+                                                    const newRemaining = slot.quantity - slot.sold - newTotalReserved;
+
+                                                    // 6. อัปเดตสถานะ slot
+                                                    connection.query(
+                                                        `UPDATE product_slots 
+                                                        SET reserved = ?, 
+                                                            status = CASE WHEN sold + ? >= quantity THEN 'inactive' ELSE 'active' END,
+                                                            updated_at = NOW()
+                                                        WHERE slot_id = ?`,
+                                                        [newTotalReserved, newTotalReserved, slot.slot_id],
+                                                        (err) => {
+                                                            if (err) {
+                                                                return connection.rollback(() => {
+                                                                    connection.release();
+                                                                    res.status(500).json({ message: "เกิดข้อผิดพลาดในการอัปเดตสล็อต" });
+                                                                });
+                                                            }
+
+                                                            // 7. Commit Transaction
+                                                            connection.commit(err => {
+                                                                if (err) {
+                                                                    return connection.rollback(() => {
+                                                                        connection.release();
+                                                                        res.status(500).json({ message: "เกิดข้อผิดพลาดในการบันทึกข้อมูล" });
+                                                                    });
+                                                                }
+
+                                                                connection.release();
+
+                                                                res.json({
+                                                                    success: true,
+                                                                    message: "อัปเดตจำนวนสินค้าในตะกร้าสำเร็จ",
+                                                                    updated_item: {
+                                                                        product_id,
+                                                                        product_name,
+                                                                        quantity,
+                                                                        total,
+                                                                        price_per_unit: price
+                                                                    },
+                                                                    stock_remaining: newRemaining,
+                                                                    stock_reserved: newTotalReserved
+                                                                });
+                                                            });
+                                                        }
+                                                    );
+                                                }
+                                            );
+                                        }
+                                    );
+                                }
+                            );
+                        }
+                    );
                 }
             );
         });
     });
 });
 
+
 // ลบสินค้าออกจากตะกร้า
-route.delete('/cart/:productId', (req, res) => {
+route.delete("/cart/:productId", (req, res) => {
     const { productId } = req.params;
     const userId = req.session.user?.id;
 
@@ -1142,64 +889,134 @@ route.delete('/cart/:productId', (req, res) => {
         return res.status(400).json({ message: "ต้องการ user_id และ product_id" });
     }
 
-    db.beginTransaction(err => {
-        if (err) return res.status(500).json({ message: "ไม่สามารถเริ่ม transaction ได้" });
+    db.getConnection((err, connection) => {
+        if (err) {
+            console.error("Error getting connection:", err);
+            return res.status(500).json({ message: "ไม่สามารถเชื่อมต่อฐานข้อมูลได้" });
+        }
 
-        db.query(`SELECT quantity FROM cart WHERE user_id = ? AND product_id = ? FOR UPDATE`, [userId, productId], (err, cartRows) => {
-            if (err) return db.rollback(() => res.status(500).json({ message: "เกิดข้อผิดพลาดในการค้นหาตะกร้า" }));
-            if (!cartRows || cartRows.length === 0) return db.rollback(() => res.status(404).json({ message: "ไม่พบสินค้าในตะกร้า" }));
+        connection.beginTransaction(err => {
+            if (err) {
+                connection.release();
+                return res.status(500).json({ message: "ไม่สามารถเริ่ม transaction ได้" });
+            }
 
-            const quantityInCart = cartRows[0].quantity;
+            // ดึงข้อมูลในตะกร้า
+            connection.query(
+                `SELECT quantity FROM cart WHERE user_id = ? AND product_id = ? FOR UPDATE`,
+                [userId, productId],
+                (err, cartRows) => {
+                    if (err) {
+                        return connection.rollback(() => {
+                            connection.release();
+                            res.status(500).json({ message: "เกิดข้อผิดพลาดในการค้นหาตะกร้า" });
+                        });
+                    }
 
-            db.query(
-                `SELECT slot_id, reserved, quantity, sold 
-                 FROM product_slots 
-                 WHERE product_id = ? AND status IN ('active', 'ended')
-                 ORDER BY start_date ASC LIMIT 1`,
-                [productId],
-                (err, slotRows) => {
-                    if (err) return db.rollback(() => res.status(500).json({ message: "เกิดข้อผิดพลาดในการค้นหาสล็อต" }));
-                    if (!slotRows || slotRows.length === 0) return db.rollback(() => res.status(400).json({ message: "ไม่มีสล็อตสำหรับสินค้านี้" }));
+                    if (!cartRows.length) {
+                        return connection.rollback(() => {
+                            connection.release();
+                            res.status(404).json({ message: "ไม่พบสินค้าในตะกร้า" });
+                        });
+                    }
 
-                    const slot = slotRows[0];
+                    const quantityInCart = cartRows[0].quantity;
 
-                    db.query(`DELETE FROM cart WHERE user_id = ? AND product_id = ?`, [userId, productId], (err) => {
-                        if (err) return db.rollback(() => res.status(500).json({ message: "เกิดข้อผิดพลาดในการลบสินค้าจากตะกร้า" }));
-
-                        // คำนวณ reserved ใหม่และอัปเดต status
-                        const newReserved = Math.max(0, slot.reserved - quantityInCart);
-                        const newStatus = (slot.quantity - slot.sold - newReserved > 0) ? 'active' : 'ended';
-
-                        db.query(
-                            `UPDATE product_slots 
-                             SET reserved = ?, status = ?
-                             WHERE slot_id = ?`,
-                            [newReserved, newStatus, slot.slot_id],
-                            (err) => {
-                                if (err) return db.rollback(() => res.status(500).json({ message: "เกิดข้อผิดพลาดในการอัปเดตสล็อต" }));
-
-                                // หลังจากอัปเดต reserved และ status ของล็อตแรกเรียบร้อย
-                                db.query(
-                                    `UPDATE product_slots
-                                    SET status = 'active'
-                                    WHERE product_id = ? AND status = 'pending'
-                                    ORDER BY start_date ASC
-                                    LIMIT 1`,
-                                    [productId],
-                                    (errNext) => {
-                                        if (errNext) console.error("เปิดล็อตถัดไปล้มเหลว", errNext);
-                                });
-
-                                db.commit(err => {
-                                    if (err) return db.rollback(() => res.status(500).json({ message: "เกิดข้อผิดพลาดในการบันทึก transaction" }));
-                                    res.json({
-                                        message: "ลบสินค้าออกจากตะกร้าเรียบร้อยแล้ว",
-                                        removed_quantity: quantityInCart
-                                    });
+                    // ดึงข้อมูลล็อต
+                    connection.query(
+                        `SELECT slot_id, reserved, quantity, sold 
+             FROM product_slots 
+             WHERE product_id = ? AND status IN ('active', 'ended')
+             ORDER BY start_date ASC LIMIT 1`,
+                        [productId],
+                        (err, slotRows) => {
+                            if (err) {
+                                return connection.rollback(() => {
+                                    connection.release();
+                                    res.status(500).json({ message: "เกิดข้อผิดพลาดในการค้นหาสล็อต" });
                                 });
                             }
-                        );
-                    });
+
+                            if (!slotRows.length) {
+                                return connection.rollback(() => {
+                                    connection.release();
+                                    res.status(400).json({ message: "ไม่มีสล็อตสำหรับสินค้านี้" });
+                                });
+                            }
+
+                            const slot = slotRows[0];
+
+                            // ลบออกจากตะกร้า
+                            connection.query(
+                                `DELETE FROM cart WHERE user_id = ? AND product_id = ?`,
+                                [userId, productId],
+                                err => {
+                                    if (err) {
+                                        return connection.rollback(() => {
+                                            connection.release();
+                                            res.status(500).json({ message: "เกิดข้อผิดพลาดในการลบสินค้าจากตะกร้า" });
+                                        });
+                                    }
+
+                                    // คำนวณ reserved ใหม่
+                                    const newReserved = Math.max(0, slot.reserved - quantityInCart);
+                                    const newStatus =
+                                        slot.quantity - slot.sold - newReserved > 0 ? "active" : "ended";
+
+                                    connection.query(
+                                        `UPDATE product_slots 
+                     SET reserved = ?, status = ?, updated_at = NOW()
+                     WHERE slot_id = ?`,
+                                        [newReserved, newStatus, slot.slot_id],
+                                        err => {
+                                            if (err) {
+                                                return connection.rollback(() => {
+                                                    connection.release();
+                                                    res.status(500).json({ message: "เกิดข้อผิดพลาดในการอัปเดตสล็อต" });
+                                                });
+                                            }
+
+                                            // เปิดล็อตถัดไป (pending → active)
+                                            connection.query(
+                                                `UPDATE product_slots
+                         SET status = 'active'
+                         WHERE product_id = ? AND status = 'pending'
+                         ORDER BY start_date ASC
+                         LIMIT 1`,
+                                                [productId],
+                                                errNext => {
+                                                    if (errNext) {
+                                                        console.warn("⚠️ เปิดล็อตถัดไปล้มเหลว:", errNext);
+                                                    }
+                                                }
+                                            );
+
+                                            connection.commit(err => {
+                                                if (err) {
+                                                    return connection.rollback(() => {
+                                                        connection.release();
+                                                        res.status(500).json({ message: "เกิดข้อผิดพลาดในการบันทึก transaction" });
+                                                    });
+                                                }
+
+                                                connection.release();
+                                                res.json({
+                                                    success: true,
+                                                    message: "ลบสินค้าออกจากตะกร้าเรียบร้อยแล้ว",
+                                                    removed_quantity: quantityInCart,
+                                                    slot_update: {
+                                                        slot_id: slot.slot_id,
+                                                        reserved: newReserved,
+                                                        status: newStatus
+                                                    }
+                                                });
+                                            });
+                                        }
+                                    );
+                                }
+                            );
+                        }
+                    );
                 }
             );
         });
@@ -1208,7 +1025,7 @@ route.delete('/cart/:productId', (req, res) => {
 
 // จ่ายเงินอันเดิม
 route.post('/checkout', upload.single('paymentSlip'), async (req, res) => {
-    const {products, user_addresses_id } = req.body;
+    const { products, user_addresses_id } = req.body;
     const user_id = req.session.user?.id;
 
     if (!user_id || !products || !user_addresses_id) {
@@ -1257,11 +1074,14 @@ route.post('/checkout', upload.single('paymentSlip'), async (req, res) => {
     }
 
     // ตรวจสอบ promptpay_number ของสินค้าทุกชิ้น
-    const promptpays = [...new Set(parsedProducts.map(p => p.promptpay_number))];
-    if (promptpays.length !== 1 || !promptpays[0]) {
+    const promptpays = [...new Set(parsedProducts.map(p => p.promptpay_number).filter(p => p))]; // filter เอาเฉพาะที่ไม่ null
+
+    let promptpayNumber = null;
+    if (promptpays.length > 1) {
         return res.status(400).json({ error: "กรุณาเลือกชำระสินค้าเฉพาะที่มี PromptPay เดียวกันเท่านั้น" });
+    } else if (promptpays.length === 1) {
+        promptpayNumber = promptpays[0];
     }
-    const promptpayNumber = promptpays[0];
 
     try {
         // ดึง payment_method_id จากสินค้าชิ้นแรก
@@ -1462,16 +1282,102 @@ route.post('/checkout', upload.single('paymentSlip'), async (req, res) => {
 // });
 
 // ดึงข้อมูลบัญชีธนาคารของ seller หรือสินค้าทางการ
-// ดึงข้อมูลบัญชีธนาคาร (รองรับทั้งสมาคมและผู้ขาย)
+// ดึงข้อมูลบัญชีธนาคาร 
+// route.get('/bank-info', async (req, res) => {
+//   try {
+//     const { orderId } = req.query;
+
+//     if (!orderId) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "กรุณาระบุ orderId",
+//       });
+//     }
+
+//     //ดึงข้อมูลจากคำสั่งซื้อไปยังสินค้า ผู้ขาย บัญชีธนาคาร
+//     const [rows] = await db.promise().query(`
+//       SELECT 
+//         pm.account_name,
+//         pm.bank_name,
+//         pm.account_number,
+//         pm.promptpay_number,
+//         p.is_official
+//       FROM orders o
+//       JOIN order_detail od ON o.order_id = od.order_id
+//       JOIN products p ON od.product_id = p.product_id
+//       LEFT JOIN payment_methods pm ON p.payment_method_id = pm.payment_method_id
+//       WHERE o.order_id = ?
+//       LIMIT 1
+//     `, [orderId]);
+
+//     //กรณีไม่พบสินค้า
+//     if (!rows || rows.length === 0) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "ไม่พบคำสั่งซื้อนี้ในระบบ",
+//       });
+//     }
+
+//     const bankData = rows[0];
+
+//     //ถ้าเป็นสินค้าของสมาคม หรือไม่มีบัญชีให้ใช้บัญชีสมาคมแทน
+//     if (bankData.is_official === 1 || !bankData.account_name) {
+//       const [official] = await db.promise().query(`
+//         SELECT 
+//           account_name, 
+//           bank_name, 
+//           account_number, 
+//           promptpay_number
+//         FROM payment_methods
+//         WHERE is_official = 1
+//         LIMIT 1
+//       `);
+
+//       if (official.length === 0) {
+//         return res.status(200).json({
+//           success: true,
+//           data: {
+//             account_name: "-",
+//             bank_name: "-",
+//             account_number: "-",
+//             promptpay_number: null
+//           }
+//         });
+//       }
+
+//       return res.json({
+//         success: true,
+//         data: official[0]
+//       });
+//     }
+
+//     //ถ้าเป็นสินค้าผู้ขายทั่วไปใช้บัญชีของผู้ขาย
+//     res.json({
+//       success: true,
+//       data: {
+//         account_name: bankData.account_name,
+//         bank_name: bankData.bank_name,
+//         account_number: bankData.account_number,
+//         promptpay_number: bankData.promptpay_number
+//       }
+//     });
+
+//   } catch (error) {
+//     console.error("Error fetching bank info:", error);
+//     res.status(500).json({
+//       success: false,
+//       message: "เกิดข้อผิดพลาดจากเซิร์ฟเวอร์"
+//     });
+//   }
+// });
+
 route.get('/bank-info', async (req, res) => {
     try {
-        const { isOfficial, sellerId } = req.query;
-
-        let rows;
+        const { isOfficial, productId } = req.query;
 
         if (isOfficial === "true") {
-            // กรณีสินค้าของสมาคม
-            [rows] = await db.promise().query(`
+            //กรณีสินค้าของสมาคม
+            const [rows] = await db.promise().query(`
                 SELECT 
                     account_name, 
                     bank_name, 
@@ -1481,52 +1387,46 @@ route.get('/bank-info', async (req, res) => {
                 WHERE is_official = 1
                 LIMIT 1
             `);
-        } else if (sellerId && !isNaN(Number(sellerId))) {
-            // กรณีสินค้าผู้ขายทั่วไป
-            [rows] = await db.promise().query(`
-                SELECT 
-                    pm.account_name, 
-                    pm.bank_name, 
-                    pm.account_number, 
-                    pm.promptpay_number
-                FROM payment_methods pm
-                JOIN products p ON p.payment_method_id = pm.payment_method_id
-                WHERE p.user_id = ?
-                LIMIT 1
-            `, [sellerId]);
-        } else {
-           
-            // ถ้าไม่มี params ให้ดึงข้อมูลสมาคม (official) เป็น default
-            [rows] = await db.promise().query(`
-                SELECT 
-                    account_name, 
-                    bank_name, 
-                    account_number, 
-                    promptpay_number
-                FROM payment_methods
-                WHERE is_official = 1
-                LIMIT 1
-            `);
+            return res.json({ success: true, data: rows[0] || {} });
         }
 
-        if (!rows || rows.length === 0) {
-            // ถ้าไม่พบข้อมูลจริงๆ ใน DB ถึงจะคืน default
-            return res.status(200).json({
-                success: true,
-                data: {
-                    account_name: "-",
-                    bank_name: "-",
-                    account_number: "-",
-                    promptpay_number: null
-                }
+        if (!productId) {
+            return res.status(400).json({
+                success: false,
+                message: "ต้องระบุ productId เพื่อดึงบัญชีผู้ขาย"
             });
         }
 
-        // ส่งข้อมูลบัญชีกลับ
-        res.json({
-            success: true,
-            data: rows[0]
-        });
+        //ดึงข้อมูลบัญชีผู้ขาย
+        const [rows] = await db.promise().query(`
+            SELECT 
+                pm.account_name, 
+                pm.bank_name, 
+                pm.account_number, 
+                pm.promptpay_number
+            FROM products p
+            JOIN payment_methods pm 
+                ON p.payment_method_id = pm.payment_method_id
+            WHERE p.product_id = ?
+            LIMIT 1
+        `, [productId]);
+
+        if (rows.length === 0) {
+            // ถ้าไม่พบ fallback เป็นบัญชีสมาคม
+            const [officialRows] = await db.promise().query(`
+                SELECT 
+                    account_name, 
+                    bank_name, 
+                    account_number, 
+                    promptpay_number
+                FROM payment_methods
+                WHERE is_official = 1
+                LIMIT 1
+            `);
+            return res.json({ success: true, data: officialRows[0] || {} });
+        }
+
+        res.json({ success: true, data: rows[0] });
 
     } catch (error) {
         console.error("Error fetching bank info:", error);
