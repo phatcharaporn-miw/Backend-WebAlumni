@@ -4,10 +4,10 @@ const route = express.Router();
 const multer = require('multer');
 const path = require('path');
 const db = require('../db');
-const { logPayment, logOrder } = require('../logUserAction');
-
+const { SystemlogAction } = require('../logUserAction');
 const generatePayload = require('promptpay-qr');
 const QRCode = require('qrcode');
+const axios = require("axios");
 
 
 // ตั้งค่าการจัดเก็บไฟล์
@@ -298,239 +298,153 @@ route.get('/summary-all', (req, res) => {
 });
 
 
-
 // ดึงรายละเอียดของสินค้า
 route.get('/souvenirDetail/:id', async (req, res) => {
-    const productId = req.params.id;
+  const productId = req.params.id;
+  const paymentMethodId = 51; // บัญชีเดียวที่ใช้สำหรับทุกสินค้า
 
-    try {
-        // ดึงข้อมูลสินค้าและ promptpay_number
-        const [productRows] = await db.promise().query(
-            `SELECT p.*, pm.promptpay_number, pm.account_name, pm.account_number, pm.bank_name
-             FROM products p
-             JOIN payment_methods pm ON p.payment_method_id = pm.payment_method_id
-             WHERE p.product_id = ?`,
-            [productId]
-        );
+  try {
+    // ดึงข้อมูลสินค้า
+    const [productRows] = await db.promise().query(
+      `SELECT *
+       FROM products
+       WHERE product_id = ?`,
+      [productId]
+    );
 
-        if (!productRows || productRows.length === 0) {
-            return res.status(404).json({ error: 'Product not found' });
-        }
-
-        // ดึง slot ที่ active และอยู่ในช่วงวันที่
-        const [slotRows] = await db.promise().query(
-            `SELECT slot_id, slot_name, quantity, sold, reserved, start_date, end_date, status
-             FROM product_slots
-             WHERE product_id = ? AND status = 'active'
-             AND (start_date <= NOW() AND (end_date IS NULL OR end_date >= NOW()))
-             ORDER BY start_date ASC LIMIT 1`,
-            [productId]
-        );
-
-        let slotInfo = null;
-        let outOfStock = false;
-        if (slotRows.length > 0) {
-            const slot = slotRows[0];
-            const available = slot.quantity - slot.sold - slot.reserved;
-            slotInfo = {
-                slot_id: slot.slot_id,
-                slot_name: slot.slot_name,
-                quantity: slot.quantity, // จำนวนที่เปิดขายใน slot นี้
-                sold: slot.sold,        // จำนวนที่ขายไปแล้ว
-                reserved: slot.reserved, // จำนวนที่จองไว้
-                available: slot.quantity - slot.sold - slot.reserved, //available = จำนวนที่ยังซื้อได้
-                start_date: slot.start_date,
-                end_date: slot.end_date,
-                status: slot.status
-            };
-            if (available <= 0) {
-                outOfStock = true;
-            } else {
-                outOfStock = true;
-            }
-        }
-
-        // รวมข้อมูลสินค้าและ slot
-        const result = {
-            ...productRows[0],
-            slot: slotInfo,
-            outOfStock: outOfStock
-        };
-
-        res.status(200).json(result);
-    } catch (err) {
-        console.error('Error fetching product details:', err);
-        return res.status(500).json({ error: 'Error fetching product details' });
+    if (!productRows || productRows.length === 0) {
+      return res.status(404).json({ error: 'Product not found' });
     }
-});
 
+    const product = productRows[0];
 
-// รอการอนุมัติคำขอ
-route.get('/pending-requests', (req, res) => {
-    const userId = req.session.user?.id;
+    // ดึง slot ที่ active และอยู่ในช่วงวันที่
+    const [slotRows] = await db.promise().query(
+      `SELECT slot_id, slot_name, quantity, sold, reserved, start_date, end_date, status
+       FROM product_slots
+       WHERE product_id = ? AND status = 'active'
+       AND (start_date <= NOW() AND (end_date IS NULL OR end_date >= NOW()))
+       ORDER BY start_date ASC LIMIT 1`,
+      [productId]
+    );
 
-    if (!userId) {
-        return res.status(401).json({ error: "ไม่ได้เข้าสู่ระบบ" });
+    let slotInfo = null;
+    let outOfStock = false;
+    if (slotRows.length > 0) {
+      const slot = slotRows[0];
+      const available = slot.quantity - slot.sold - slot.reserved;
+      slotInfo = {
+        slot_id: slot.slot_id,
+        slot_name: slot.slot_name,
+        quantity: slot.quantity,
+        sold: slot.sold,
+        reserved: slot.reserved,
+        available,
+        start_date: slot.start_date,
+        end_date: slot.end_date,
+        status: slot.status
+      };
+      outOfStock = available <= 0;
     }
-    const query = `
-    SELECT 
-    products.*, role.role_id
-    FROM products 
-    JOIN users ON products.user_id = users.user_id
-    JOIN role ON users.role_id = role.role_id
-    WHERE status = "0" AND products.user_id = ?
-    `;
 
-    db.query(query, [userId, userId], (err, results) => {
-        if (err) {
-            console.error("Error fetching pending requests:", err);
-            return res.status(500).json({ error: "ดึงข้อมูลไม่สำเร็จ" });
-        }
-        res.json(results);
-    });
+    // ดึงข้อมูลบัญชีเดียว
+    const [paymentRows] = await db.promise().query(
+      `SELECT promptpay_number, account_name, account_number, bank_name
+       FROM payment_methods
+       WHERE payment_method_id = ?`,
+      [paymentMethodId]
+    );
+
+    const paymentInfo = paymentRows[0] || {};
+
+    // รวมข้อมูลสินค้า, slot, และบัญชีเดียว
+    const result = {
+      ...product,
+      slot: slotInfo,
+      outOfStock,
+      payment: paymentInfo
+    };
+
+    res.status(200).json(result);
+  } catch (err) {
+    console.error('Error fetching product details:', err);
+    return res.status(500).json({ error: 'Error fetching product details' });
+  }
 });
 
 // เพิ่มสินค้าอันใหม่ 
 route.post('/addsouvenir', upload.single('image'), (req, res) => {
-    const { productName, description, price, quantity, paymentMethod,
-        bankName, accountNumber, accountName, promptpayNumber, start_date, end_date, slot_name } = req.body;
-    const user = req.session.user;
-    const user_id = user?.id;
-    const image = req.file ? req.file.filename : null;
+  const { productName, description, price, slotName, quantity, startDate, endDate } = req.body;
+  const user_id = req.session.user?.id;
+  const image = req.file ? req.file.filename : null;
 
-    if (!image) {
-        return res.status(400).json({ error: 'Image is required' });
-    }
+  const payment_method_id = 51; // ใช้บัญชีเดียวที่มี
 
-    if (!productName || !description || !price || !quantity || !paymentMethod ||
-        !bankName || !accountNumber || !accountName || !slot_name) {
-        return res.status(400).json({ error: 'ต้องกรอกข้อมูลทุกช่องให้ครบถ้วน' });
-    }
+  db.getConnection((err, connection) => {
+    if (err) return res.status(500).json({ error: 'Database connection error' });
 
-    db.beginTransaction((err) => {
+    // เริ่ม transaction
+    connection.beginTransaction(err => {
+      if (err) {
+        connection.release();
+        return res.status(500).json({ error: 'Transaction start error' });
+      }
+
+      // Insert product
+      const queryProduct = `
+        INSERT INTO products 
+        (product_name, description, image, price, user_id, status)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `;
+      const valuesProduct = [productName, description, image, price, user_id, 1];
+
+      connection.query(queryProduct, valuesProduct, (err, result) => {
         if (err) {
-            return res.status(500).json({ error: 'Failed to start transaction' });
+          return connection.rollback(() => {
+            connection.release();
+            console.error(err);
+            res.status(500).json({ error: 'Error inserting product' });
+          });
         }
 
-        const queryPayment = `
-            INSERT INTO payment_methods 
-            (method_name, bank_name, account_name, account_number, promptpay_number) 
-            VALUES (?, ?, ?, ?, ?)
-        `;
-        const valuesPayment = [
-            paymentMethod,
-            bankName,
-            accountName,
-            accountNumber,
-            promptpayNumber
-        ];
+        const product_id = result.insertId;
 
-        db.query(queryPayment, valuesPayment, (err, result) => {
+        // Insert slot สำหรับสินค้า
+        const querySlot = `
+            INSERT INTO product_slots 
+            (product_id, slot_name, quantity, sold, start_date, end_date, status, reserved, created_at)
+            VALUES (?, ?, ?, 0, NULL, ?, 1, 0, NOW())
+            `;
+            const valuesSlot = [product_id, slotName, quantity, endDate || null];
+
+        connection.query(querySlot, valuesSlot, (err, slotResult) => {
+          if (err) {
+            return connection.rollback(() => {
+              connection.release();
+              console.error(err);
+              res.status(500).json({ error: 'Error inserting product slot' });
+            });
+          }
+
+          // Commit transaction
+          connection.commit(err => {
+            connection.release();
             if (err) {
-                return db.rollback(() => {
-                    return res.status(500).json({ error: 'Error inserting payment method' });
-                });
+              console.error(err);
+              return res.status(500).json({ error: 'Commit transaction failed' });
             }
 
-            const payment_method_id = result.insertId;
-
-            // ตรวจสอบ role เพื่อกำหนด is_official
-            const isOfficial = (user.role_id === 1 || user.role_id === 2) ? 1 : 0;
-
-            const queryProduct = `
-                INSERT INTO products 
-                (product_name, description, image, price, user_id, status, payment_method_id, is_official) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            `;
-            const valuesProduct = [
-                productName,
-                description,
-                image,
-                price,
-                user_id,
-                "0",  // ยังไม่อนุมัติ
-                payment_method_id,
-                isOfficial
-            ];
-
-            db.query(queryProduct, valuesProduct, (err, result) => {
-                if (err) {
-                    return db.rollback(() => {
-                        db.query(`DELETE FROM payment_methods WHERE payment_method_id = ?`, [payment_method_id]);
-                        return res.status(500).json({ error: 'Error inserting product' });
-                    });
-                }
-
-                const product_id = result.insertId;
-
-                const querySlot = `
-                    INSERT INTO product_slots 
-                    (product_id, slot_name, quantity, sold, reserved, start_date, end_date, status, created_at)
-                    VALUES (?, ?, ?, 0, 0, ?, ?, 'active', NOW())
-                `;
-                db.query(querySlot, [product_id, slot_name, quantity, start_date, end_date], (err) => {
-                    if (err) {
-                        return db.rollback(() => {
-                            return res.status(500).json({ error: 'Error inserting product slot' });
-                        });
-                    }
-
-                    db.query(`SELECT user_id FROM users WHERE role_id IN (1, 2)`, (err, resultUsers) => {
-                        if (err) {
-                            return db.rollback(() => {
-                                return res.status(500).json({ error: 'Failed to fetch target users for notification' });
-                            });
-                        }
-
-                        const notifications = resultUsers.map(row => [
-                            row.user_id,
-                            'souvenir_request',
-                            `มีคำขอขายของที่ระลึก: ${productName}`
-                        ]);
-
-                        if (notifications.length > 0) {
-                            db.query(
-                                `INSERT INTO notifications (user_id, type, message)
-                                 VALUES ? 
-                                 ON DUPLICATE KEY UPDATE 
-                                 message = VALUES(message),
-                                 send_date = NOW(),
-                                 status = 'ยังไม่อ่าน';`,
-                                [notifications],
-                                (err) => {
-                                    if (err) {
-                                        return db.rollback(() => {
-                                            return res.status(500).json({ error: 'Failed to insert notifications' });
-                                        });
-                                    }
-
-                                    db.commit(err => {
-                                        if (err) {
-                                            return db.rollback(() => {
-                                                return res.status(500).json({ error: 'Failed to commit transaction' });
-                                            });
-                                        }
-                                        return res.status(200).json({ message: 'Product, slot, payment method, and notifications added successfully' });
-                                    });
-                                }
-                            );
-                        } else {
-                            db.commit((err) => {
-                                if (err) {
-                                    return db.rollback(() => {
-                                        return res.status(500).json({ error: 'Failed to commit transaction' });
-                                    });
-                                }
-                                return res.status(200).json({ message: 'Product and slot added (no users to notify)' });
-                            });
-                        }
-                    });
-                });
+            res.status(200).json({
+              message: 'Product and slot added successfully',
+              product_id,
+              slot_id: slotResult.insertId
             });
+          });
         });
+      });
     });
+  });
 });
-
 
 
 // ดึงตะกร้ามาจ้า
@@ -547,12 +461,9 @@ route.get('/cart', (req, res) => {
             products.product_id, 
             products.product_name, 
             products.price, 
-            products.image,
-            products.payment_method_id,
-            pm.promptpay_number
+            products.image
         FROM cart
         JOIN products ON cart.product_id = products.product_id
-        LEFT JOIN payment_methods pm ON products.payment_method_id = pm.payment_method_id
         WHERE cart.user_id = ?
     `;
 
@@ -589,6 +500,110 @@ route.get('/cart/count', (req, res) => {
 
 // อันใหม่
 // เพิ่มสินค้าลงตะกร้า
+// route.post('/cart/add', (req, res) => {
+//     const { product_id, quantity } = req.body;
+//     const user_id = req.session.user?.id;
+
+//     if (!user_id || !product_id || !quantity) {
+//         return res.status(400).json({ message: "ข้อมูลไม่ครบถ้วนหรือไม่ถูกต้อง" });
+//     }
+
+//     db.getConnection((err, connection) => {
+//         if (err) return res.status(500).json({ message: "ไม่สามารถเชื่อมต่อฐานข้อมูลได้" });
+
+//         connection.beginTransaction(err => {
+//             if (err) {
+//                 connection.release();
+//                 return res.status(500).json({ message: "ไม่สามารถเริ่ม transaction ได้" });
+//             }
+
+//             connection.query(`SELECT price FROM products WHERE product_id = ?`, [product_id], (err, productRows) => {
+//                 if (err) return rollback("เกิดข้อผิดพลาดในการค้นหาสินค้า");
+//                 if (!productRows.length) return rollback("ไม่พบสินค้า");
+
+//                 const { price } = productRows[0];
+//                 const total = price * quantity;
+
+//                 connection.query(
+//                     `SELECT slot_id, quantity, sold, reserved 
+//                     FROM product_slots 
+//                     WHERE product_id = ? AND status = 'active' 
+//                     AND (start_date <= NOW() AND (end_date IS NULL OR end_date >= NOW()))
+//                     ORDER BY start_date ASC LIMIT 1`,
+//                     [product_id],
+//                     (err, slotRows) => {
+//                         if (err) return rollback("เกิดข้อผิดพลาดในการค้นหาสล็อต");
+//                         if (!slotRows.length) return rollback("สินค้าหมดหรือไม่มีสล็อตที่ใช้งานได้");
+
+//                         const slot = slotRows[0];
+//                         const available = slot.quantity - slot.sold - slot.reserved;
+//                         if (available < quantity) {
+//                             return rollback(`จำนวนสินค้าไม่พอ (คงเหลือ ${available} ชิ้น)`);
+//                         }
+
+//                         connection.query(
+//                             `SELECT quantity FROM cart WHERE user_id = ? AND product_id = ? FOR UPDATE`,
+//                             [user_id, product_id],
+//                             (err, cartRows) => {
+//                                 if (err) return rollback("เกิดข้อผิดพลาดในการค้นหาตะกร้า");
+
+//                                 let newQuantity = quantity;
+//                                 let newTotal = total;
+//                                 const afterCartUpdate = (err) => {
+//                                     if (err) return rollback("อัปเดตตะกร้าล้มเหลว");
+
+//                                     connection.query(
+//                                         `UPDATE product_slots 
+//                                         SET reserved = reserved + ?,
+//                                             status = CASE WHEN sold + reserved + ? >= quantity THEN 'ended' ELSE 'active' END
+//                                         WHERE slot_id = ?`,
+//                                         [quantity, quantity, slot.slot_id],
+//                                         (err) => {
+//                                             if (err) return rollback("อัปเดตสล็อตล้มเหลว");
+
+//                                             connection.commit(err => {
+//                                                 if (err) return rollback("commit ล้มเหลว");
+
+//                                                 connection.release();
+//                                                 return res.json({ message: "เพิ่มสินค้าลงตะกร้าสำเร็จ", cartCount: newQuantity });
+//                                             });
+//                                         }
+//                                     );
+//                                 };
+
+//                                 if (cartRows.length > 0) {
+//                                     newQuantity += Number(cartRows[0].quantity);
+//                                     newTotal = price * newQuantity;
+//                                     connection.query(
+//                                         `UPDATE cart SET quantity = ?, total = ? WHERE user_id = ? AND product_id = ?`,
+//                                         [newQuantity, newTotal, user_id, product_id],
+//                                         afterCartUpdate
+//                                     );
+//                                 } else {
+//                                     connection.query(
+//                                         `INSERT INTO cart (user_id, product_id, quantity, total) VALUES (?, ?, ?, ?)`,
+//                                         [user_id, product_id, quantity, total],
+//                                         afterCartUpdate
+//                                     );
+//                                 }
+//                             }
+//                         );
+//                     }
+//                 );
+//             });
+
+//             // ฟังก์ชัน rollback กลาง
+//             function rollback(msg) {
+//                 connection.rollback(() => {
+//                     connection.release();
+//                     res.status(500).json({ message: msg });
+//                 });
+//             }
+//         });
+//     });
+// });
+
+// เพิ่มสินค้าลงตะกร้า
 route.post('/cart/add', (req, res) => {
     const { product_id, quantity } = req.body;
     const user_id = req.session.user?.id;
@@ -606,80 +621,96 @@ route.post('/cart/add', (req, res) => {
                 return res.status(500).json({ message: "ไม่สามารถเริ่ม transaction ได้" });
             }
 
-            connection.query(`SELECT price FROM products WHERE product_id = ?`, [product_id], (err, productRows) => {
-                if (err) return rollback("เกิดข้อผิดพลาดในการค้นหาสินค้า");
-                if (!productRows.length) return rollback("ไม่พบสินค้า");
+            connection.query(
+                `SELECT price FROM products WHERE product_id = ?`,
+                [product_id],
+                (err, productRows) => {
+                    if (err) return rollback("เกิดข้อผิดพลาดในการค้นหาสินค้า");
+                    if (!productRows.length) return rollback("ไม่พบสินค้า");
 
-                const { price } = productRows[0];
-                const total = price * quantity;
+                    // แปลงราคาเป็น Number
+                    const price = Number(productRows[0].price);
+                    const qty = Number(quantity);
+                    let total = price * qty;
 
-                connection.query(
-                    `SELECT slot_id, quantity, sold, reserved 
-           FROM product_slots 
-           WHERE product_id = ? AND status = 'active' 
-           AND (start_date <= NOW() AND (end_date IS NULL OR end_date >= NOW()))
-           ORDER BY start_date ASC LIMIT 1`,
-                    [product_id],
-                    (err, slotRows) => {
-                        if (err) return rollback("เกิดข้อผิดพลาดในการค้นหาสล็อต");
-                        if (!slotRows.length) return rollback("สินค้าหมดหรือไม่มีสล็อตที่ใช้งานได้");
+                    connection.query(
+                        `SELECT slot_id, quantity, sold, reserved 
+                         FROM product_slots 
+                         WHERE product_id = ? AND status = 'active' 
+                         AND (start_date <= NOW() AND (end_date IS NULL OR end_date >= NOW()))
+                         ORDER BY start_date ASC LIMIT 1`,
+                        [product_id],
+                        (err, slotRows) => {
+                            if (err) return rollback("เกิดข้อผิดพลาดในการค้นหาสล็อต");
+                            if (!slotRows.length) return rollback("สินค้าหมดหรือไม่มีสล็อตที่ใช้งานได้");
 
-                        const slot = slotRows[0];
-                        const available = slot.quantity - slot.sold - slot.reserved;
-                        if (available < quantity) {
-                            return rollback(`จำนวนสินค้าไม่พอ (คงเหลือ ${available} ชิ้น)`);
-                        }
+                            const slot = slotRows[0];
+                            const available = Number(slot.quantity) - Number(slot.sold) - Number(slot.reserved);
 
-                        connection.query(
-                            `SELECT quantity FROM cart WHERE user_id = ? AND product_id = ? FOR UPDATE`,
-                            [user_id, product_id],
-                            (err, cartRows) => {
-                                if (err) return rollback("เกิดข้อผิดพลาดในการค้นหาตะกร้า");
-
-                                let newQuantity = quantity;
-                                let newTotal = total;
-                                const afterCartUpdate = (err) => {
-                                    if (err) return rollback("อัปเดตตะกร้าล้มเหลว");
-
-                                    connection.query(
-                                        `UPDATE product_slots 
-                     SET reserved = reserved + ?,
-                         status = CASE WHEN sold + reserved + ? >= quantity THEN 'ended' ELSE 'active' END
-                     WHERE slot_id = ?`,
-                                        [quantity, quantity, slot.slot_id],
-                                        (err) => {
-                                            if (err) return rollback("อัปเดตสล็อตล้มเหลว");
-
-                                            connection.commit(err => {
-                                                if (err) return rollback("commit ล้มเหลว");
-
-                                                connection.release();
-                                                return res.json({ message: "เพิ่มสินค้าลงตะกร้าสำเร็จ", cartCount: newQuantity });
-                                            });
-                                        }
-                                    );
-                                };
-
-                                if (cartRows.length > 0) {
-                                    newQuantity += cartRows[0].quantity;
-                                    newTotal = price * newQuantity;
-                                    connection.query(
-                                        `UPDATE cart SET quantity = ?, total = ? WHERE user_id = ? AND product_id = ?`,
-                                        [newQuantity, newTotal, user_id, product_id],
-                                        afterCartUpdate
-                                    );
-                                } else {
-                                    connection.query(
-                                        `INSERT INTO cart (user_id, product_id, quantity, total) VALUES (?, ?, ?, ?)`,
-                                        [user_id, product_id, quantity, total],
-                                        afterCartUpdate
-                                    );
-                                }
+                            if (available < qty) {
+                                return rollback(`จำนวนสินค้าไม่พอ (คงเหลือ ${available} ชิ้น)`);
                             }
-                        );
-                    }
-                );
-            });
+
+                            connection.query(
+                                `SELECT quantity FROM cart WHERE user_id = ? AND product_id = ? FOR UPDATE`,
+                                [user_id, product_id],
+                                (err, cartRows) => {
+                                    if (err) return rollback("เกิดข้อผิดพลาดในการค้นหาตะกร้า");
+
+                                    let newQuantity = qty; // จำนวนใหม่
+                                    let newTotal = total;
+
+                                    const afterCartUpdate = (err) => {
+                                        if (err) return rollback("อัปเดตตะกร้าล้มเหลว");
+
+                                        connection.query(
+                                            `UPDATE product_slots 
+                                             SET reserved = reserved + ?,
+                                             status = CASE WHEN sold + reserved + ? >= quantity THEN 'ended' ELSE 'active' END
+                                             WHERE slot_id = ?`,
+                                            [qty, qty, slot.slot_id],
+                                            (err) => {
+                                                if (err) return rollback("อัปเดตสล็อตล้มเหลว");
+
+                                                connection.commit(err => {
+                                                    if (err) return rollback("commit ล้มเหลว");
+
+                                                    connection.release();
+                                                    return res.json({
+                                                        message: "เพิ่มสินค้าลงตะกร้าสำเร็จ",
+                                                        cartCount: newQuantity
+                                                    });
+                                                });
+                                            }
+                                        );
+                                    };
+
+                                    // ถ้ามีสินค้าเดิมในตะกร้า → รวมจำนวน (ต้องแปลงเป็น Number ก่อน)
+                                    if (cartRows.length > 0) {
+                                        const oldQty = Number(cartRows[0].quantity);
+
+                                        newQuantity = oldQty + qty; 
+                                        newTotal = price * newQuantity;
+
+                                        connection.query(
+                                            `UPDATE cart SET quantity = ?, total = ? WHERE user_id = ? AND product_id = ?`,
+                                            [newQuantity, newTotal, user_id, product_id],
+                                            afterCartUpdate
+                                        );
+                                    } else {
+                                        connection.query(
+                                            `INSERT INTO cart (user_id, product_id, quantity, total) 
+                                             VALUES (?, ?, ?, ?)`,
+                                            [user_id, product_id, qty, total],
+                                            afterCartUpdate
+                                        );
+                                    }
+                                }
+                            );
+                        }
+                    );
+                }
+            );
 
             // ฟังก์ชัน rollback กลาง
             function rollback(msg) {
@@ -879,7 +910,6 @@ route.put("/cart/update", (req, res) => {
     });
 });
 
-
 // ลบสินค้าออกจากตะกร้า
 route.delete("/cart/:productId", (req, res) => {
     const { productId } = req.params;
@@ -965,8 +995,8 @@ route.delete("/cart/:productId", (req, res) => {
 
                                     connection.query(
                                         `UPDATE product_slots 
-                     SET reserved = ?, status = ?, updated_at = NOW()
-                     WHERE slot_id = ?`,
+                                        SET reserved = ?, status = ?, updated_at = NOW()
+                                        WHERE slot_id = ?`,
                                         [newReserved, newStatus, slot.slot_id],
                                         err => {
                                             if (err) {
@@ -979,10 +1009,10 @@ route.delete("/cart/:productId", (req, res) => {
                                             // เปิดล็อตถัดไป (pending → active)
                                             connection.query(
                                                 `UPDATE product_slots
-                         SET status = 'active'
-                         WHERE product_id = ? AND status = 'pending'
-                         ORDER BY start_date ASC
-                         LIMIT 1`,
+                                                SET status = 'active'
+                                                WHERE product_id = ? AND status = 'pending'
+                                                ORDER BY start_date ASC
+                                                LIMIT 1`,
                                                 [productId],
                                                 errNext => {
                                                     if (errNext) {
@@ -1027,12 +1057,10 @@ route.delete("/cart/:productId", (req, res) => {
 route.post('/checkout', upload.single('paymentSlip'), async (req, res) => {
     const { products, user_addresses_id } = req.body;
     const user_id = req.session.user?.id;
+    const ipAddress = req.ip; 
 
-    if (!user_id || !products || !user_addresses_id) {
-        return res.status(400).json({ error: "ข้อมูลไม่ครบถ้วน" });
-    }
 
-    // (พลอยเพิ่ม)ดึงข้อมูลที่อยู่จาก user_addresses
+    // ดึงที่อยู่ผู้ใช้
     const [addrRows] = await db.promise().query(
         `SELECT * FROM user_addresses WHERE user_addresses_id = ?`,
         [user_addresses_id]
@@ -1053,79 +1081,37 @@ route.post('/checkout', upload.single('paymentSlip'), async (req, res) => {
         return res.status(400).json({ error: "ไม่มีรายการสินค้า" });
     }
 
-    // ตรวจสอบว่าทุก product มี seller_id หรือไม่
-    let sellerId;
-    let sellerProducts = parsedProducts;
-    if (parsedProducts.length > 0 && parsedProducts[0].user_id) {
-        const sellerIds = [...new Set(parsedProducts.map(p => p.user_id))];
-        if (sellerIds.length !== 1) {
-            return res.status(400).json({ error: "กรุณาเลือกชำระสินค้าเฉพาะของผู้ขายเดียวกันเท่านั้น" });
-        }
-        sellerId = sellerIds[0];
-    } else {
-        const [sellerRows] = await db.promise().query(
-            `SELECT user_id FROM products WHERE product_id = ? LIMIT 1`,
-            [parsedProducts[0].product_id]
-        );
-        if (!sellerRows || sellerRows.length === 0) {
-            return res.status(400).json({ error: "ไม่พบข้อมูลผู้ขายของสินค้า" });
-        }
-        sellerId = sellerRows[0].user_id;
-    }
-
-    // ตรวจสอบ promptpay_number ของสินค้าทุกชิ้น
-    const promptpays = [...new Set(parsedProducts.map(p => p.promptpay_number).filter(p => p))]; // filter เอาเฉพาะที่ไม่ null
-
-    let promptpayNumber = null;
-    if (promptpays.length > 1) {
-        return res.status(400).json({ error: "กรุณาเลือกชำระสินค้าเฉพาะที่มี PromptPay เดียวกันเท่านั้น" });
-    } else if (promptpays.length === 1) {
-        promptpayNumber = promptpays[0];
-    }
-
     try {
-        // ดึง payment_method_id จากสินค้าชิ้นแรก
-        let paymentMethodId;
-        if (sellerProducts.length > 0) {
-            const [pmRows] = await db.promise().query(
-                `SELECT payment_method_id FROM products WHERE product_id = ? LIMIT 1`,
-                [sellerProducts[0].product_id]
-            );
-            if (!pmRows || pmRows.length === 0) {
-                return res.status(400).json({ error: "ไม่พบ payment method ของสินค้า" });
-            }
-            paymentMethodId = pmRows[0].payment_method_id;
-        } else {
-            return res.status(400).json({ error: "ไม่มีสินค้า" });
+        // ใช้บัญชีสมาคมเดียว
+        const [pmRows] = await db.promise().query(
+            `SELECT payment_method_id, promptpay_number FROM payment_methods WHERE is_official = 1 LIMIT 1`
+        );
+        if (!pmRows.length) {
+            return res.status(400).json({ error: "ไม่พบบัญชีสมาคม" });
         }
+        const paymentMethodId = pmRows[0].payment_method_id;
+        const promptpayNumber = pmRows[0].promptpay_number || null;
 
-        const slipPath = req.file ? req.file.filename : null;
+        const total_amount = parsedProducts.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+        const total_quantity = parsedProducts.reduce((sum, item) => sum + item.quantity, 0);
 
-        const total_amount = sellerProducts.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-        const total_quantity = sellerProducts.reduce((sum, item) => sum + item.quantity, 0);
-
-        // สร้างคำสั่งซื้อ (order_status = 'pending_verification')
+        // สร้างคำสั่งซื้อ
         const [orderResult] = await db.promise().query(
             `INSERT INTO orders (
                 user_id, 
-                seller_id, 
                 payment_status, 
-                quantity, 
                 order_status, 
                 total_amount, 
                 user_addresses_id,
                 order_date
-            )
-            VALUES (?, ?, 'pending', ?, 'pending_verification', ?, ?, NOW())`,
-            [user_id, sellerId, total_quantity, total_amount, user_addresses_id]
+            ) VALUES (?, 'pending', 'pending_verification', ?, ?, NOW())`,
+            [user_id, total_amount, user_addresses_id] 
         );
 
         const orderId = orderResult.insertId;
 
-        // บันทึก log การสั่งซื้อ
-        logOrder(user_id, orderId, "สั่งซื้อสินค้า");
-
-        // เพิ่มข้อมูลการชำระเงิน (payment_status = 'paid')
+        // เพิ่มข้อมูลการชำระเงิน
+        const slipPath = req.file ? req.file.filename : null;
         const [paymentResult] = await db.promise().query(
             `INSERT INTO payment (order_id, amount, payment_status, payment_date, created_at, payment_method_id, slip_path)
              VALUES (?, ?, 'pending', NOW(), NOW(), ?, ?)`,
@@ -1139,31 +1125,46 @@ route.post('/checkout', upload.single('paymentSlip'), async (req, res) => {
             [paymentId, orderId]
         );
 
-        if (slipPath) {
-            logOrder(user_id, orderId, "อัปโหลดสลิปการชำระเงิน");
-        }
-
         // เพิ่มรายละเอียดสินค้า
-        const insertItems = sellerProducts.map(product =>
+        const insertItems = parsedProducts.map(product =>
             db.promise().query(
                 `INSERT INTO order_detail (order_id, product_id, quantity, total)
-                VALUES (?, ?, ?, ?)`,
+                 VALUES (?, ?, ?, ?)`,
                 [orderId, product.product_id, product.quantity, product.price * product.quantity]
             )
         );
 
         await Promise.all(insertItems);
 
+
+try {
+    // ดึงข้อมูลชื่อผู้ใช้ (เพื่อแสดงในข้อความแจ้งเตือน)
+    const [userRows] = await db.promise().query(
+        `SELECT full_name FROM profiles WHERE user_id = ?`,
+        [user_id]
+    );
+    const fullName = userRows.length ? userRows[0].full_name : "ผู้ใช้";
+
+    // สร้างข้อความแจ้งเตือน
+    const message = `${fullName} ได้ทำการสั่งซื้อสินค้าจำนวน ${total_quantity} ชิ้น รวมเป็นเงิน ${total_amount.toLocaleString()} บาท`;
+
+    // เพิ่มการแจ้งเตือนสำหรับแอดมิน
+    await db.promise().query(
+        `INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
+         VALUES (?, 'order', ?, ?, NOW(), 'ยังไม่อ่าน')`,
+        [1, message, orderId]
+    );
+
+} catch (notifyErr) {
+    console.error("Notification insert error:", notifyErr);
+}
+
         // ลบสินค้าจากตะกร้า
-        const productIds = sellerProducts.map(p => p.product_id);
+        const productIds = parsedProducts.map(p => p.product_id);
         await db.promise().query(
             `DELETE FROM cart WHERE user_id = ? AND product_id IN (${productIds.map(() => '?').join(',')})`,
             [user_id, ...productIds]
         );
-
-        // แจ้งเตือนแอดมิน
-        await notifyAdminNewOrder(orderId, user_id);
-
 
         res.status(200).json({ message: "สั่งซื้อสำเร็จ", orderId });
 
@@ -1172,6 +1173,46 @@ route.post('/checkout', upload.single('paymentSlip'), async (req, res) => {
         res.status(500).json({ error: "เกิดข้อผิดพลาดในการสั่งซื้อ" });
     }
 });
+
+// รายชื่อจังหวัดจาก github
+route.get('/provinces', async (req, res) => {
+  try {
+    const response = await axios.get(
+      'https://raw.githubusercontent.com/kongvut/thai-province-data/master/api/latest/province.json'
+    );
+    res.json(response.data);
+  } catch (err) {
+    console.error("Error fetching provinces:", err);
+    res.status(500).json({ error: "Failed to load provinces" });
+  }
+});
+
+// โหลดข้อมูลอำเภอ
+route.get("/districts", async (req, res) => {
+  try {
+    const response = await axios.get(
+      "https://raw.githubusercontent.com/kongvut/thai-province-data/master/api/latest/district.json"
+    );
+    res.json(response.data);
+  } catch (err) {
+    console.error("Error fetching districts:", err.message);
+    res.status(500).json({ error: "Failed to fetch districts" });
+  }
+});
+
+// โหลดข้อมูลตำบล
+route.get("/subdistricts", async (req, res) => {
+  try {
+    const response = await axios.get(
+      "https://raw.githubusercontent.com/kongvut/thai-province-data/master/api/latest/sub_district.json"
+    );
+    res.json(response.data);
+  } catch (err) {
+    console.error("Error fetching subdistricts:", err.message);
+    res.status(500).json({ error: "Failed to fetch subdistricts" });
+  }
+});
+
 
 // route.post('/checkout', upload.single('paymentSlip'), async (req, res) => {
 //     const { products, user_addresses_id } = req.body;
@@ -1371,127 +1412,80 @@ route.post('/checkout', upload.single('paymentSlip'), async (req, res) => {
 //   }
 // });
 
+// ดึงบัญชีสมาคม (ใช้บัญชีเดียวสำหรับสินค้าทั้งหมด)
 route.get('/bank-info', async (req, res) => {
-    try {
-        const { isOfficial, productId } = req.query;
+  try {
+    const [rows] = await db.promise().query(`
+      SELECT 
+        account_name, 
+        bank_name, 
+        account_number, 
+        promptpay_number
+      FROM payment_methods
+      WHERE is_official = 1
+      LIMIT 1
+    `);
 
-        if (isOfficial === "true") {
-            //กรณีสินค้าของสมาคม
-            const [rows] = await db.promise().query(`
-                SELECT 
-                    account_name, 
-                    bank_name, 
-                    account_number, 
-                    promptpay_number
-                FROM payment_methods
-                WHERE is_official = 1
-                LIMIT 1
-            `);
-            return res.json({ success: true, data: rows[0] || {} });
-        }
-
-        if (!productId) {
-            return res.status(400).json({
-                success: false,
-                message: "ต้องระบุ productId เพื่อดึงบัญชีผู้ขาย"
-            });
-        }
-
-        //ดึงข้อมูลบัญชีผู้ขาย
-        const [rows] = await db.promise().query(`
-            SELECT 
-                pm.account_name, 
-                pm.bank_name, 
-                pm.account_number, 
-                pm.promptpay_number
-            FROM products p
-            JOIN payment_methods pm 
-                ON p.payment_method_id = pm.payment_method_id
-            WHERE p.product_id = ?
-            LIMIT 1
-        `, [productId]);
-
-        if (rows.length === 0) {
-            // ถ้าไม่พบ fallback เป็นบัญชีสมาคม
-            const [officialRows] = await db.promise().query(`
-                SELECT 
-                    account_name, 
-                    bank_name, 
-                    account_number, 
-                    promptpay_number
-                FROM payment_methods
-                WHERE is_official = 1
-                LIMIT 1
-            `);
-            return res.json({ success: true, data: officialRows[0] || {} });
-        }
-
-        res.json({ success: true, data: rows[0] });
-
-    } catch (error) {
-        console.error("Error fetching bank info:", error);
-        res.status(500).json({
-            success: false,
-            message: "เกิดข้อผิดพลาดจากเซิร์ฟเวอร์"
-        });
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "ไม่พบบัญชีสมาคม"
+      });
     }
+
+    res.json({
+      success: true,
+      data: rows[0]
+    });
+  } catch (error) {
+    console.error("Error fetching bank info:", error);
+    res.status(500).json({
+      success: false,
+      message: "เกิดข้อผิดพลาดจากเซิร์ฟเวอร์"
+    });
+  }
 });
 
 
 
+
 // ฟังก์ชันแจ้งเตือนแอดมินและผู้ขายเมื่อมีการสั่งซื้อใหม่
-async function notifyAdminNewOrder(orderId, buyerId) {
-    const insertNoti = `
-        INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
-        VALUES (?, 'order', ?, ?, NOW(), 'ยังไม่อ่าน')
-        ON DUPLICATE KEY UPDATE 
-            message = VALUES(message),
-            send_date = NOW(),
-            status = 'ยังไม่อ่าน';
-    `;
+// async function notifyAdminNewOrder(orderId, buyerId) {
+//     const insertNoti = `
+//         INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
+//         VALUES (?, 'order', ?, ?, NOW(), 'ยังไม่อ่าน')
+//         ON DUPLICATE KEY UPDATE 
+//             message = VALUES(message),
+//             send_date = NOW(),
+//             status = 'ยังไม่อ่าน';
+//     `;
 
-    try {
-        // ดึงชื่อสินค้าทั้งหมดในคำสั่งซื้อ
-        const [products] = await db.promise().query(
-            `SELECT GROUP_CONCAT(p.product_name SEPARATOR ', ') AS product_names
-             FROM order_detail oi
-             JOIN products p ON oi.product_id = p.product_id
-             WHERE oi.order_id = ?`,
-            [orderId]
-        );
+//     try {
+//         // ดึงชื่อสินค้าทั้งหมดในคำสั่งซื้อ
+//         const [products] = await db.promise().query(
+//             `SELECT GROUP_CONCAT(p.product_name SEPARATOR ', ') AS product_names
+//              FROM order_detail oi
+//              JOIN products p ON oi.product_id = p.product_id
+//              WHERE oi.order_id = ?`,
+//             [orderId]
+//         );
 
-        const productNames = products[0]?.product_names || "สินค้า";
+//         const productNames = products[0]?.product_names || "สินค้า";
 
-        // แจ้งเตือนแอดมิน
-        const [admins] = await db.promise().query(
-            `SELECT user_id FROM users WHERE role_id = 1 AND is_active = 1`
-        );
-        if (admins && admins.length > 0) {
-            const message = `มีคำสั่งซื้อใหม่รายการที่: ${orderId} (${productNames})`;
-            for (const admin of admins) {
-                await db.promise().query(insertNoti, [admin.user_id, message, orderId]);
-            }
-        }
-
-        // แจ้งเตือนผู้ขาย
-        const [sellers] = await db.promise().query(
-            `SELECT DISTINCT p.user_id AS seller_id
-             FROM order_detail oi 
-             JOIN products p ON oi.product_id = p.product_id 
-             WHERE oi.order_id = ?`,
-            [orderId]
-        );
-
-        if (sellers && sellers.length > 0) {
-            for (const seller of sellers) {
-                const sellerMessage = `มีคำสั่งซื้อสินค้าของคุณ (${productNames})`;
-                await db.promise().query(insertNoti, [seller.seller_id, sellerMessage, orderId]);
-            }
-        }
-    } catch (err) {
-        console.error("Error notifying (admin/sellers):", err);
-    }
-}
+//         // แจ้งเตือนแอดมิน
+//         const [admins] = await db.promise().query(
+//             `SELECT user_id FROM users WHERE role_id = 1 AND is_active = 1`
+//         );
+//         if (admins && admins.length > 0) {
+//             const message = `มีคำสั่งซื้อใหม่รายการที่: ${orderId} (${productNames})`;
+//             for (const admin of admins) {
+//                 await db.promise().query(insertNoti, [admin.user_id, message, orderId]);
+//             }
+//         }
+//     } catch (err) {
+//         console.error("Error notifying (admin/sellers):", err);
+//     }
+// }
 
 
 // ประวัติการซื้อ

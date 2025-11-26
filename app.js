@@ -33,6 +33,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(cors({
     origin: [
         'http://localhost:3002',
+        'http://10.198.200.71',
         'https://collegeofcomputing-alumni.netlify.app' // เปลี่ยนเป็น URL ของ frontend
       ], 
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -44,21 +45,16 @@ app.set('trust proxy', 1);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-// app.use('/img', express.static('img'));
-// app.use('/api/uploads', express.static(path.join(__dirname, 'uploads')));
-// app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 app.use(session({
   secret: process.env.SESSION_SECRET || 'secret_key',
   resave: false,
   saveUninitialized: false,
   cookie: {
-    // secure: true,            //ใช้ HTTPS
-    secure: false,         
+    secure: false,      // local => false; production + HTTPS => true
     httpOnly: true,
-    // sameSite: 'none',        //ตั้งเป็น none เพื่อให้ cookie ข้ามโดเมนได้
-    sameSite: 'lax',        
-    maxAge: 1000 * 60 * 60,  
+    sameSite: 'lax',   // เพื่อให้ cookie ข้ามพอร์ต/โดเมน (dev)
+    maxAge: 1000 * 60 * 60,
   }
 }));
 
@@ -68,11 +64,11 @@ app.use('/images', express.static(path.join(__dirname, 'img')));
 app.use('/api/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-app.use(passport.initialize());
-app.use(passport.session());
+// app.use(passport.initialize());
+// app.use(passport.session());
 
-passport.serializeUser((user, done) => done(null, user));
-passport.deserializeUser((obj, done) => done(null, obj));
+// passport.serializeUser((user, done) => done(null, user));
+// passport.deserializeUser((obj, done) => done(null, obj));
 
 // route
 var indexRouter = require('./routes/index');
@@ -89,15 +85,13 @@ var AdminAllRoute= require('./routes/admin');
 var alumniRoute= require('./routes/alumni');
 var activityRoute = require('./routes/activity'); 
 var ordersRoute = require('./routes/orders');
-var sellerRouter = require('./routes/seller');
+// var sellerRouter = require('./routes/seller');
 // var LoginRouter = require('./routes/login');
 
 app.use('/api', indexRouter);
-// app.use('/login', LoginRouter);
 app.use('/users', usersRouter);
 app.use('/add', registerRouter);
 app.use('/donate', DonateRoute);
-
 // app.use('/admin', AdminRoute);
 app.use('/souvenir',SouvenirRoute);
 app.use('/web', webboardRouter);
@@ -108,7 +102,6 @@ app.use('/alumni', alumniRoute);
 app.use('/activity', activityRoute); 
 app.use('/news', NewsRoute);
 app.use('/orders', ordersRoute);
-app.use('/seller', sellerRouter); 
 
 //for admin
 app.use('/admin', AdminAllRoute);

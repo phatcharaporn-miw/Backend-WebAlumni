@@ -32,9 +32,9 @@ router.get('/major/:major', (req, res) => {
       educations.degree_id,
       major.major_name
     FROM educations
-    JOIN profiles ON educations.user_id = profiles.user_id
+    JOIN profiles ON educations.profiles_id = profiles.profiles_id
     JOIN major ON educations.major_id = major.major_id
-    JOIN users ON educations.user_id = users.user_id
+    JOIN users ON profiles.user_id = users.user_id
     WHERE major.major_name = ? AND users.role_id = 3
   `;
 
@@ -47,48 +47,63 @@ router.get('/major/:major', (req, res) => {
   });
 });
 
+
 // แสดงศิษย์เก่าดีเด่น
 router.get("/outstanding-alumni", (req, res) => {
-  const queryOutstanding = 
-  `
+  const queryOutstanding = `
     SELECT 
         u.user_id,
         p.full_name AS name,
         p.image_path,
+        p.email,
+        p.phone,
+        a.major_id,
+        m.major_name,
         COUNT(DISTINCT w.webboard_id) AS post_count,
         COUNT(DISTINCT c.comment_id) AS comment_count,
         COUNT(DISTINCT ep.participant_id) AS event_count,
         IFNULL(SUM(d.amount), 0) AS total_donations,
-        -- น้ำหนักคะแนนรวม
+        -- คะแนนรวม
         (COUNT(DISTINCT w.webboard_id) * 2 +
         COUNT(DISTINCT c.comment_id) +
         COUNT(DISTINCT ep.participant_id) * 3 +
         IFNULL(SUM(d.amount), 0) / 100) AS engagement_score
     FROM users u
     JOIN profiles p ON u.user_id = p.user_id
+    LEFT JOIN alumni a ON u.user_id = a.user_id
+    LEFT JOIN major m ON a.major_id = m.major_id
     LEFT JOIN webboard w ON w.user_id = u.user_id
     LEFT JOIN comment c ON c.user_id = u.user_id
     LEFT JOIN participants ep ON ep.user_id = u.user_id
     LEFT JOIN donations d ON d.user_id = u.user_id
     WHERE u.role_id = 3 AND u.deleted_at IS NULL
-    GROUP BY u.user_id
+    GROUP BY 
+        u.user_id,
+        p.full_name,
+        p.image_path,
+        p.email,
+        p.phone,
+        a.major_id,
+        m.major_name
     ORDER BY engagement_score DESC
     LIMIT 5;
   `;
+
   db.query(queryOutstanding, (err, results) => {
     if (err) {
       console.error('Database error:', err);
       return res.status(500).json({ message: 'เกิดข้อผิดพลาดในเซิร์ฟเวอร์' });
     }
-    res.json(results);
-  }); 
+    res.json({ success: true, data: results });
+  });
 });
-  
+
+
 // ดึงข้อมูลผู้ใช้ตาม ID
 router.get('/:userId', (req, res) => {
-    const { userId } = req.params;
+  const { userId } = req.params;
 
-    const query = `
+  const query = `
         SELECT 
             users.user_id, 
             users.role_id,  
@@ -116,7 +131,7 @@ router.get('/:userId', (req, res) => {
         WHERE users.user_id = ? AND users.deleted_at IS NULL
     `;
 
-    const queryactivity = `
+  const queryactivity = `
         SELECT 
             participants.activity_id,
             activity.activity_name,
@@ -139,66 +154,138 @@ router.get('/:userId', (req, res) => {
         WHERE participants.user_id = ?
     `;
 
-    const queryWebboard = `
+  const queryWebboard = `
         SELECT webboard_id, title, created_at
         FROM webboard
         WHERE user_id = ? AND deleted_at IS NULL
     `;
 
-    db.query(query, [userId], (err, results) => {
-        if (err) {
-            console.error('Error fetching user profile:', err);
-            return res.status(500).json({ success: false, message: 'Database error' });
+  db.query(query, [userId], (err, results) => {
+    if (err) {
+      console.error('Error fetching user profile:', err);
+      return res.status(500).json({ success: false, message: 'Database error' });
+    }
+
+    if (results.length === 0) {
+      console.warn('No user found with user_id:', userId);
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const userInfo = {
+      user_id: results[0].user_id,
+      role_id: results[0].role_id,
+      role_name: results[0].role_name,
+      is_active: results[0].is_active,
+      full_name: results[0].full_name,
+      email: results[0].email,
+      phone: results[0].phone,
+      address: results[0].address,
+      image_path: results[0].image_path,
+      educations: results.map(edu => ({
+        degree: edu.degree_id,
+        degree_name: edu.degree_name,
+        major: edu.major_id,
+        major_name: edu.major_name,
+        studentId: edu.studentId,
+        graduation_year: edu.graduation_year,
+        entry_year: edu.entry_year,
+      }))
+    };
+
+    db.query(queryactivity, [userId], (errAct, actResults) => {
+      if (errAct) {
+        console.error("Error fetching activities:", errAct);
+        return res.status(500).json({ success: false, message: 'Error fetching activities' });
+      }
+
+      db.query(queryWebboard, [userId], (errPost, postResults) => {
+        if (errPost) {
+          console.error("Error fetching posts:", errPost);
+          return res.status(500).json({ success: false, message: 'Error fetching posts' });
         }
 
-        if (results.length === 0) {
-            console.warn('No user found with user_id:', userId);
-            return res.status(404).json({ success: false, message: 'User not found' });
-        }
+        userInfo.activities = actResults || [];
+        userInfo.posts = postResults || [];
 
-        const userInfo = {
-            user_id: results[0].user_id,
-            role_id: results[0].role_id,
-            role_name: results[0].role_name,
-            is_active: results[0].is_active,
-            full_name: results[0].full_name,
-            email: results[0].email,
-            phone: results[0].phone,
-            address: results[0].address,
-            image_path: results[0].image_path,
-            educations: results.map(edu => ({
-                degree: edu.degree_id,
-                degree_name: edu.degree_name,
-                major: edu.major_id,
-                major_name: edu.major_name,
-                studentId: edu.studentId,
-                graduation_year: edu.graduation_year,
-                entry_year: edu.entry_year,
-            }))
-        };
-
-        db.query(queryactivity, [userId], (errAct, actResults) => {
-            if (errAct) {
-                console.error("Error fetching activities:", errAct);
-                return res.status(500).json({ success: false, message: 'Error fetching activities' });
-            }
-
-            db.query(queryWebboard, [userId], (errPost, postResults) => {
-                if (errPost) {
-                    console.error("Error fetching posts:", errPost);
-                    return res.status(500).json({ success: false, message: 'Error fetching posts' });
-                }
-
-                userInfo.activities = actResults || [];
-                userInfo.posts = postResults || [];
-
-                res.status(200).json({ success: true, data: userInfo, fullName: userInfo.full_name });
-            });
-        });
+        res.status(200).json({ success: true, data: userInfo, fullName: userInfo.full_name });
+      });
     });
+  });
 });
 
 // อัปโหลด Excel
+// router.post("/upload-excel", upload.single("excelFile"), async (req, res) => {
+//   try {
+//     if (!req.file) return res.status(400).json({ message: "กรุณาเลือกไฟล์" });
+
+//     const workbook = xlsx.readFile(req.file.path);
+//     const sheet = workbook.Sheets[workbook.SheetNames[0]];
+//     const rows = xlsx.utils.sheet_to_json(sheet);
+
+//     if (!rows.length) return res.status(400).json({ message: "ไฟล์ว่าง" });
+
+//     const defaultPassword = "alumnicollegeofcomputing";
+//     const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+
+//     let insertedCount = 0;
+//     let skippedCount = 0;
+
+//     for (const row of rows) {
+//       const { studentId, full_name, title, email, degree_id, major_id, entry_year, graduation_year } = row;
+//       if (!studentId) continue;
+
+//       // ตรวจสอบว่ามี username อยู่แล้ว
+//       const [exist] = await db.promise().query(
+//         "SELECT COUNT(*) AS count FROM login WHERE username = ?",
+//         [studentId]
+//       );
+
+//       if (exist[0].count > 0) {
+//         skippedCount++;
+//         continue;
+//       }
+
+//       //สร้าง users
+//       const [userResult] = await db.promise().query(
+//         "INSERT INTO users (role_id, is_active, created_at) VALUES (?, ?, NOW())",
+//         [3, 1]
+//       );
+//       const userId = userResult.insertId;
+
+//       //สร้าง login
+//       await db.promise().query(
+//         "INSERT INTO login (user_id, username, password, is_first_login) VALUES (?, ?, ?, ?)",
+//         [userId, studentId, hashedPassword, 1]
+//       );
+
+//       //สร้าง profiles
+//       const [profileResult] = await db.promise().query(
+//         "INSERT INTO profiles (user_id, full_name, title, email, created_at) VALUES (?, ?, ?, ?, NOW())",
+//         [userId, full_name || "", title, email || ""]
+//       );
+//       const profilesId = profileResult.insertId; // ดึง profiles_id มาใช้
+
+//       //เพิ่ม education 
+//       await db.promise().query(
+//         "INSERT INTO educations (profiles_id, studentId, degree_id, major_id, entry_year, graduation_year) VALUES (?, ?, ?, ?, ?, ?)",
+//         [profilesId, studentId, degree_id, major_id, entry_year || null, graduation_year || null]
+//       );
+
+//       insertedCount++;
+//     }
+
+//     res.json({
+//       success: true,
+//       message: `เพิ่มศิษย์เก่า ${insertedCount} รายการ, ข้าม ${skippedCount} รายการ`,
+//       note: "รหัสผ่านเริ่มต้น: alumnicollegeofcomputing",
+//     });
+//   } catch (err) {
+//     console.error("Upload error:", err);
+//     res.status(500).json({ message: "เกิดข้อผิดพลาดระหว่างอัปโหลด" });
+//   }
+// });
+
+
 router.post("/upload-excel", upload.single("excelFile"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ message: "กรุณาเลือกไฟล์" });
@@ -216,47 +303,58 @@ router.post("/upload-excel", upload.single("excelFile"), async (req, res) => {
     let skippedCount = 0;
 
     for (const row of rows) {
-  const { studentId, full_name,title, email, degree_id, major_id, entry_year, graduation_year } = row;
-  if (!studentId) continue;
+      const { studentId, full_name, title, email, degree_id, major_id, entry_year, graduation_year } = row;
+      if (!studentId) continue;
 
-  // ตรวจสอบว่ามี username อยู่แล้ว
-  const [exist] = await db.promise().query(
-    "SELECT COUNT(*) AS count FROM login WHERE username = ?",
-    [studentId]
-  );
+      // ตรวจสอบว่ามี username อยู่แล้ว
+      const [exist] = await db.promise().query(
+        "SELECT COUNT(*) AS count FROM login WHERE username = ?",
+        [studentId]
+      );
 
-  if (exist[0].count > 0) {
-    skippedCount++;
-    continue;
-  }
+      if (exist[0].count > 0) {
+        skippedCount++;
+        continue;
+      }
 
-  //สร้าง users
-  const [userResult] = await db.promise().query(
-    "INSERT INTO users (role_id, is_active, created_at) VALUES (?, ?, NOW())",
-    [3, 1]
-  );
-  const userId = userResult.insertId;
+      // สร้าง users
+      const [userResult] = await db.promise().query(
+        "INSERT INTO users (role_id, is_active, created_at) VALUES (?, ?, NOW())",
+        [3, 1]
+      );
+      const userId = userResult.insertId;
 
-  //สร้าง login
-  await db.promise().query(
-    "INSERT INTO login (user_id, username, password, is_first_login) VALUES (?, ?, ?, ?)",
-    [userId, studentId, hashedPassword, 1]
-  );
+      // สร้าง login
+      await db.promise().query(
+        "INSERT INTO login (user_id, username, password, is_first_login) VALUES (?, ?, ?, ?)",
+        [userId, studentId, hashedPassword, 1]
+      );
 
-  //สร้าง profiles
-  await db.promise().query(
-    "INSERT INTO profiles (user_id, full_name, title, email, created_at) VALUES (?, ?, ?, ?, NOW())",
-    [userId, full_name || "", title,  email || ""]
-  );
+      // สร้าง profiles
+      const [profileResult] = await db.promise().query(
+        "INSERT INTO profiles (user_id, full_name, title, email, created_at) VALUES (?, ?, ?, ?, NOW())",
+        [userId, full_name || "", title || "", email || ""]
+      );
+      const profilesId = profileResult.insertId;
 
-  //เพิ่ม education
-  await db.promise().query(
-    "INSERT INTO educations (user_id, studentId, degree_id, major_id, entry_year, graduation_year) VALUES (?, ?, ?, ?, ?, ?)",
-    [userId, studentId, degree_id, major_id, entry_year || null, graduation_year || null]
-  );
+      // เพิ่ม education
+      await db.promise().query(
+        `INSERT INTO educations 
+          (profiles_id, studentId, degree_id, major_id, entry_year, graduation_year, student_year, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
+        [
+          profilesId,
+          studentId,
+          degree_id || null,
+          major_id || null,
+          entry_year || null,
+          graduation_year || null,
+          null // student_year เว้นว่าง, คำนวณทีหลังถ้าต้องการ
+        ]
+      );
 
-  insertedCount++;
-}
+      insertedCount++;
+    }
 
     res.json({
       success: true,

@@ -4,7 +4,7 @@ var db = require('../db');
 var multer = require('multer');
 var path = require('path');
 var { LoggedIn, checkActiveUser } = require('../middlewares/auth');
-const { logActivity } = require('../logUserAction');
+const { SystemlogAction } = require('../logUserAction');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -19,7 +19,7 @@ const upload = multer({ storage: storage });
 
 // เพิ่มกิจกรรม
 router.post('/post-activity', LoggedIn, checkActiveUser, upload.array('images', 5), (req, res) => {
-
+  const ipAddress = req.ip; 
   if (!req.session.user || !req.session.user.id) {
     return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
   }
@@ -33,9 +33,8 @@ router.post('/post-activity', LoggedIn, checkActiveUser, upload.array('images', 
     end_date,
     start_time,
     end_time,
-    registration_required,
     max_participants,
-    batch_restriction,
+    current_participants,
     department_restriction,
     check_alumni
   } = req.body;
@@ -61,8 +60,8 @@ router.post('/post-activity', LoggedIn, checkActiveUser, upload.array('images', 
   const queryInsertActivity = `
       INSERT INTO activity (
         user_id, activity_name, activity_date, description, end_date, status, start_time,
-        end_time,registration_required, max_participants, batch_restriction, department_restriction, check_alumni, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW());
+        end_time, max_participants, current_participants, department_restriction, check_alumni, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW());
     `;
 
   const values = [
@@ -74,9 +73,8 @@ router.post('/post-activity', LoggedIn, checkActiveUser, upload.array('images', 
     status,
     start_time,
     end_time,
-    registration_required,
     max_participants,
-    batch_restriction,
+    current_participants,
     department_restriction,
     check_alumni
   ];
@@ -106,7 +104,15 @@ router.post('/post-activity', LoggedIn, checkActiveUser, upload.array('images', 
         return res.status(500).json({ message: 'กิจกรรมถูกเพิ่ม แต่บันทึกรูปไม่สำเร็จ' });
       }
 
-      logActivity(userId, activityId, 'เพิ่มกิจกรรม');
+      // บันทึก log การเพิ่มกิจกรรม
+        SystemlogAction(
+            userId,
+            'Activity', // moduleName
+            'CREATE',   // actionType
+            `เพิ่มกิจกรรม: ${activity_name}`, // description
+            ipAddress,
+            activityId // relatedId
+        );
 
       res.status(200).json({ message: 'เพิ่มกิจกรรมเรียบร้อย (มีรูป)' });
     });
@@ -121,45 +127,58 @@ router.get('/all-activity', (req, res) => {
         activity_name,
         activity_date,
         description,
-      (
+        (
           SELECT activity_image.image_path 
           FROM activity_image 
           WHERE activity_image.activity_id = activity.activity_id 
           LIMIT 1
         ) AS image_path,
-        COALESCE(end_date, activity_date) AS end_date, -- ใช้ activity_date หาก end_date เป็น NULL
+        COALESCE(end_date, activity_date) AS end_date, 
         start_time, 
-        end_time, 
+        end_time,
         max_participants,
         department_restriction,
         check_alumni,
         created_at,
         updated_at,
         deleted_at,
-        -- คำนวณสถานะจากวันที่
+        is_paid_required,
+        price,
         CASE
-        WHEN CURDATE() > COALESCE(end_date, activity_date) THEN 1  -- เสร็จแล้ว
-        WHEN CURDATE() < activity_date THEN 0  -- กำลังจะจัดขึ้น
-        ELSE 2  -- กำลังดำเนินการ
-      END AS status,
+          WHEN CURDATE() > COALESCE(end_date, activity_date) THEN 1
+          WHEN CURDATE() < activity_date THEN 0
+          ELSE 2
+        END AS status,
         (SELECT COUNT(*) FROM participants WHERE participants.activity_id = activity.activity_id) AS current_participants
       FROM activity
-      WHERE deleted_at IS NULL 
-    `;
+      WHERE deleted_at IS NULL;
+  `;
 
-  db.query(queryActivity, (err, results) => {
-    if (err) {
-      console.error('เกิดข้อผิดพลาดในการดึงกิจกรรม:', err);
-      return res.status(500).json({ error: 'เกิดข้อผิดพลาดในการดึงกิจกรรม' });
-    }
+  db.query(queryActivity, (err, activities) => {
+    if (err) return res.status(500).json({ error: 'เกิดข้อผิดพลาดในการดึงกิจกรรม' });
 
-    res.status(200).json({
-      success: true,
-      data: results
+    // ถ้ามีกิจกรรมต้องจ่ายเงิน ให้ดึงบัญชีสมาคม
+    const hasPaidActivity = activities.some(a => a.is_paid_required === 1);
+
+    if (!hasPaidActivity) return res.json({ success: true, data: activities });
+
+    // ดึงบัญชี
+    const queryAccounts = `SELECT bank_name, account_name, account_number, promptpay_number FROM payment_methods WHERE is_official = 1`;
+
+    db.query(queryAccounts, (err2, accounts) => {
+      if (err2) return res.status(500).json({ error: 'เกิดข้อผิดพลาดในการดึงบัญชีสมาคม' });
+
+      // เพิ่ม accounts เข้าไปในกิจกรรมที่ต้องจ่ายเงิน
+      const updatedActivities = activities.map(act => ({
+        ...act,
+        official_accounts: act.is_paid_required === 1 ? accounts : []
+      }));
+
+      res.json({ success: true, data: updatedActivities });
     });
-
   });
 });
+
 
 // แสดงกิจกรรมตาม ID
 router.get('/:activityId', (req, res) => {
@@ -186,16 +205,17 @@ router.get('/:activityId', (req, res) => {
         created_at,
         updated_at,
         deleted_at,
-        -- คำนวณสถานะจากวันที่
+        is_paid_required,
+        price,
         CASE
-          WHEN COALESCE(end_date, activity_date) < CURDATE() THEN 1  -- เสร็จแล้ว (1)
-          WHEN activity_date > CURDATE() THEN 0  -- กำลังจะจัดขึ้น (0)
-          ELSE 2  -- กำลังดำเนินการ (2)
+          WHEN COALESCE(end_date, activity_date) < CURDATE() THEN 1
+          WHEN activity_date > CURDATE() THEN 0
+          ELSE 2
         END AS status,
         (SELECT COUNT(*) FROM participants WHERE participants.activity_id = activity.activity_id) AS current_participants
       FROM activity
-      WHERE activity_id = ?
-    `;
+      WHERE activity_id = ?;
+  `;
 
   db.query(queryActivityId, [activityId], (err, results) => {
     if (err) {
@@ -207,14 +227,39 @@ router.get('/:activityId', (req, res) => {
       return res.status(404).json({ success: false, message: 'ไม่พบกิจกรรม' });
     }
 
-    res.json({ success: true, data: results[0], breadcrumb: results[0].activity_name });
+    const activity = results[0];
+
+    // ถ้ากิจกรรมต้องจ่ายเงิน ให้ดึงบัญชีสมาคม
+    if (activity.is_paid_required === 1) {
+      const queryAccounts = `
+        SELECT bank_name, account_name, account_number, promptpay_number 
+        FROM payment_methods 
+        WHERE is_official = 1;
+      `;
+
+      db.query(queryAccounts, (err2, accounts) => {
+        if (err2) {
+          console.error('เกิดข้อผิดพลาดในการดึงบัญชีสมาคม:', err2);
+          return res.status(500).json({ error: 'เกิดข้อผิดพลาดในการดึงบัญชีสมาคม' });
+        }
+
+        activity.official_accounts = accounts; // เพิ่มบัญชีสมาคมเข้าไป
+
+        res.json({ success: true, data: activity, breadcrumb: activity.activity_name });
+      });
+    } else {
+      activity.official_accounts = [];
+      res.json({ success: true, data: activity, breadcrumb: activity.activity_name });
+    }
   });
 });
+
 
 
 // แก้ไขกิจกรรม
 router.put('/edit-activity/:activityId', LoggedIn, checkActiveUser, upload.array('images', 5), (req, res) => {
   const { activityId } = req.params;
+  const ipAddress = req.ip; 
 
   if (!req.session.user || !req.session.user.id) {
     return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
@@ -263,8 +308,16 @@ router.put('/edit-activity/:activityId', LoggedIn, checkActiveUser, upload.array
     }
 
     if (!req.files || req.files.length === 0) {
-      // ไม่มีรูปใหม่
-      logActivity(userId, activityId, 'แก้ไขกิจกรรม');
+
+       // บันทึก log การแก้ไขกิจกรรม
+        SystemlogAction(
+            userId,
+            'Activity', // moduleName
+            'UPDATE',   // actionType
+            `แก้ไขกิจกรรม: ${activity_name}`, // description
+            ipAddress,
+            activityId // relatedId
+        );
 
       return res.status(200).json({ success: true, message: 'แก้ไขกิจกรรมเรียบร้อย (ไม่มีรูปใหม่)' });
     }
@@ -289,7 +342,14 @@ router.put('/edit-activity/:activityId', LoggedIn, checkActiveUser, upload.array
 
       Promise.all(insertImages)
         .then(() => {
-          logActivity(userId, activityId, 'แก้ไขกิจกรรมและอัปเดตรูปภาพ');
+        SystemlogAction(
+            userId,
+            'Activity', // moduleName
+            'UPDATE',   // actionType
+            `แก้ไขและเพิ่มรูปภาพ: ${activity_name}`, // description
+            ipAddress,
+            activityId // relatedId
+        );
           return res.status(200).json({ success: true, message: 'แก้ไขกิจกรรมและรูปภาพเรียบร้อยแล้ว!' });
         })
         .catch(err => {
@@ -298,7 +358,6 @@ router.put('/edit-activity/:activityId', LoggedIn, checkActiveUser, upload.array
         });
     });
   });
-
 });
 
 
@@ -306,10 +365,7 @@ router.put('/edit-activity/:activityId', LoggedIn, checkActiveUser, upload.array
 router.delete('/delete-activity/:activityId', LoggedIn, checkActiveUser, (req, res) => {
   const { activityId } = req.params;
   const userId = req.session.user?.id;
-
-  // if (!user || (user.role !== 1 && user.role !== 2)) {
-  //     return res.status(403).json({ success: false, message: 'คุณไม่มีสิทธิ์ลบกิจกรรม' });
-  // }
+  const ipAddress = req.ip;
 
   const query = `
         UPDATE activity
@@ -327,7 +383,15 @@ router.delete('/delete-activity/:activityId', LoggedIn, checkActiveUser, (req, r
       return res.status(404).json({ success: false, message: 'ไม่พบกิจกรรมที่ต้องการลบ' });
     }
 
-    logActivity(userId, activityId, 'ลบกิจกรรม');
+     // บันทึก log การเพิ่มกิจกรรม
+        SystemlogAction(
+            userId,
+            'Activity', // moduleName
+            'DELETE',   // actionType
+            `ลบกิจกรรม: ${activity_name}`, // description
+            ipAddress,
+            activityId // relatedId
+        );
 
     res.status(200).json({ success: true, message: 'ลบกิจกรรมเรียบร้อยแล้ว!' });
   });
@@ -351,15 +415,18 @@ router.post('/activity-form', LoggedIn, checkActiveUser, (req, res) => {
 
   // ดึงข้อมูลกิจกรรมเพื่อตรวจสอบเงื่อนไข
   const queryActivity = `
-      SELECT 
-        batch_restriction,
-        department_restriction,
-        check_alumni,
-        max_participants,
-        (SELECT COUNT(*) FROM participants WHERE activity_id = ?) AS current_participants
-      FROM activity
-      WHERE activity_id = ?;
-    `;
+  SELECT 
+    batch_restriction,
+    department_restriction,
+    check_alumni,
+    max_participants,
+    is_paid_required, 
+    price,
+    (SELECT COUNT(*) FROM participants WHERE activity_id = ?) AS current_participants
+  FROM activity
+  WHERE activity_id = ?;
+`;
+
 
   db.query(queryActivity, [activity_id, activity_id], (err, activityResults) => {
     if (err) {
@@ -460,6 +527,80 @@ router.post('/activity-form', LoggedIn, checkActiveUser, (req, res) => {
   });
 });
 
+// router.post('/activity-form', LoggedIn, checkActiveUser, upload.single('paymentSlip'), (req, res) => {
+//   const userId = req.session.user?.id;
+//   const userRole = req.session.user.role;
+//   const ipAddress = req.ip;
+//   const { activity_id, full_name, email, phone, batch_year, department, education_level, year_level } = req.body;
+//   const paymentSlip = req.file ? `/uploads/payment_slips/${req.file.filename}` : null;
+
+//   const queryActivity = `
+//     SELECT department_restriction, check_alumni, max_participants,
+//            is_paid_required, price,
+//            (SELECT COUNT(*) FROM participants WHERE activity_id = ?) AS current_participants
+//     FROM activity WHERE activity_id = ?;
+//   `;
+
+//   db.query(queryActivity, [activity_id, activity_id], (err, actRes) => {
+//     if (err) return res.status(500).json({ error: 'เกิดข้อผิดพลาดในระบบ' });
+//     if (!actRes.length) return res.status(404).json({ success: false, message: 'ไม่พบกิจกรรม' });
+
+//     const activity = actRes[0];
+
+//     // ตรวจสอบจำนวนผู้เข้าร่วม
+//     if (activity.max_participants && activity.current_participants >= activity.max_participants) {
+//       return res.status(400).json({ success: false, message: 'กิจกรรมนี้มีผู้เข้าร่วมครบแล้ว' });
+//     }
+
+//     // ตรวจสอบว่าเป็นกิจกรรมที่ต้องจ่ายเงินหรือไม่
+//     let paymentStatus = 'paid';
+//     if (activity.is_paid_required) {
+//       if (!paymentSlip) {
+//         return res.status(400).json({ success: false, message: 'กรุณาอัปโหลดสลิปชำระเงินก่อนเข้าร่วมกิจกรรมนี้' });
+//       }
+//       paymentStatus = 'pending'; //รอแอดมินตรวจสอบ
+//     }
+
+//     // ตรวจสอบว่าลงทะเบียนแล้วหรือยัง
+//     const checkSql = `SELECT * FROM participants WHERE user_id = ? AND activity_id = ?;`;
+//     db.query(checkSql, [userId, activity_id], (err, existRes) => {
+//       if (err) return res.status(500).json({ error: 'เกิดข้อผิดพลาดในระบบ' });
+//       if (existRes.length > 0) return res.status(400).json({ success: false, message: 'คุณได้ลงทะเบียนกิจกรรมนี้แล้ว' });
+
+//       const insertSql = `
+//         INSERT INTO participants (
+//           user_id, activity_id, full_name, email, phone, batch_year, department,
+//           education_level, year_level, payment_status, payment_slip, registered_at
+//         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW());
+//       `;
+
+//       const values = [
+//         userId, activity_id, full_name, email, phone,
+//         batch_year || null, department || null,
+//         education_level || null, year_level || null,
+//         paymentStatus, paymentSlip
+//       ];
+
+//       db.query(insertSql, values, (err) => {
+//         if (err) return res.status(500).json({ error: 'เกิดข้อผิดพลาดในการเพิ่มข้อมูล' });
+//          // บันทึก log การเพิ่มกิจกรรม
+//         SystemlogAction(
+//             userId,
+//             'Activity', // moduleName
+//             'CREATE',   // actionType
+//             `ลงทะเบียนเข้าร่วม: ${activity_name}`, // description
+//             ipAddress,
+//             activity // relatedId
+//         );
+//         const msg = activity.is_paid_required
+//           ? 'ลงทะเบียนสำเร็จ กรุณารอการตรวจสอบการชำระเงินจากผู้ดูแล'
+//           : 'ลงทะเบียนกิจกรรมสำเร็จ!';
+//         res.status(200).json({ success: true, message: msg });
+//       });
+//     });
+//   });
+// });
+
 // แสดงรายชื่อผู้เข้าร่วมกิจกรรม
 router.get('/:activityId/participants', LoggedIn, checkActiveUser, (req, res) => {
   const { activityId } = req.params;
@@ -509,7 +650,7 @@ router.get('/activity-history/:userId', LoggedIn, checkActiveUser, (req, res) =>
       activity.activity_name,
       activity.activity_date,
       activity.description,
-       (
+      (
         SELECT activity_image.image_path 
         FROM activity_image 
         WHERE activity_image.activity_id = activity.activity_id 
@@ -542,7 +683,6 @@ router.get('/activity-history/:userId', LoggedIn, checkActiveUser, (req, res) =>
   });
 });
 
-
 // ตรวจสอบว่าผู้ใช้เข้าร่วมกิจกรรมนี้แล้วหรือยัง
 router.get('/check-join/:activityId', (req, res) => {
   const userId = req.session.user?.id;
@@ -563,9 +703,6 @@ router.get('/check-join/:activityId', (req, res) => {
     return res.status(200).json({ success: true, joined });
   });
 });
-
-
-
 
 
 

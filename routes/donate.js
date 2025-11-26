@@ -1,7 +1,7 @@
 const express = require("express");
 const route = express.Router();
 const multer = require('multer');
-const path = require('path');
+const { SystemlogAction } = require('../logUserAction');
 const QRCode = require('qrcode');
 const generatePayload = require('promptpay-qr');
 var db = require('../db');
@@ -26,6 +26,33 @@ const authenticateUser = (req, res, next) => {
 };
 
 const upload = multer({ storage: storage });
+
+// ดึงบัญชีธนาคาร
+route.get('/bank-info', (req, res) => {
+    const query = `
+        SELECT 
+            bank_name, 
+            account_name, 
+            account_number, 
+            promptpay_number 
+        FROM payment_methods 
+        WHERE is_official = 1 
+        LIMIT 1
+    `;
+
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error('Error fetching bank info:', err);
+            return res.status(500).json({ error: 'Error fetching bank info' });
+        }
+
+        if (results.length === 0) {
+            return res.status(404).json({ error: 'Bank info not found' });
+        }
+
+        res.status(200).json(results[0]);
+    });
+});
 
 // ดึงโครงการทั้งหมด
 route.get('/donate', (req, res) => {
@@ -94,6 +121,7 @@ route.get('/donatedetail/:id', (req, res) => {
 route.post('/donateRequest', upload.single('image'), async (req, res) => {
     try {
         const userId = req.session.user?.id;
+        const ipAddress = req.ip;
 
         if (!userId) {
             return res.status(400).json({ error: 'User ID is required' });
@@ -122,11 +150,11 @@ route.post('/donateRequest', upload.single('image'), async (req, res) => {
             return res.status(400).json({ error: 'Image is required' });
         }
 
-        //เพิ่มข้อมูลช่องทางการชำระเงิน
+        // เพิ่มช่องทางการชำระเงิน
         const insertPaymentQuery = `
-      INSERT INTO payment_methods (method_name, bank_name, account_name, account_number, promptpay_number)
-      VALUES (?, ?, ?, ?, ?)
-    `;
+            INSERT INTO payment_methods (method_name, bank_name, account_name, account_number, promptpay_number)
+            VALUES (?, ?, ?, ?, ?)
+        `;
         const paymentValues = [
             paymentMethod || null,
             bankName || null,
@@ -134,18 +162,28 @@ route.post('/donateRequest', upload.single('image'), async (req, res) => {
             accountNumber || null,
             numberPromtpay || null
         ];
-
         const paymentResult = await queryAsync(insertPaymentQuery, paymentValues);
         const paymentMethodId = paymentResult.insertId;
 
-        //เพิ่มข้อมูลโครงการบริจาค
-        const insertProjectQuery = `
-      INSERT INTO donationproject 
-      (project_name, user_id, description, start_date, end_date, donation_type, image_path, 
-       target_amount, current_amount, for_things, type_things, quantity_things, status, payment_method_id) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `;
+        // กำหนดสถานะอัตโนมัติ
+        const today = new Date();
+        const start = new Date(startDate);
+        const end = new Date(endDate);
 
+        let status = 0; // กำลังจะจัดขึ้น
+        if (today >= start && today <= end) status = 1; // กำลังดำเนินการ
+        else if (today > end) status = 3; // สิ้นสุดแล้ว
+
+        const diffDays = Math.ceil((end - today) / (1000*60*60*24));
+        if (status === 1 && diffDays <= 3) status = 2; // ใกล้สิ้นสุด
+
+        // เพิ่มโครงการบริจาค
+        const insertProjectQuery = `
+            INSERT INTO donationproject 
+            (project_name, user_id, description, start_date, end_date, donation_type, image_path, 
+             target_amount, current_amount, for_things, type_things, quantity_things, status, payment_method_id) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+        `;
         const projectValues = [
             projectName,
             userId,
@@ -159,23 +197,23 @@ route.post('/donateRequest', upload.single('image'), async (req, res) => {
             forThings || null,
             typeThings || null,
             quantityThings || null,
-            '0', // สถานะเริ่มต้น
+            status,
             paymentMethodId
         ];
-
         const projectResult = await queryAsync(insertProjectQuery, projectValues);
         const projectId = projectResult.insertId;
 
-        // แจ้งเตือนไปยังแอดมิน (user_id = 1)
-        const notifyMessage = `มีคำขอสร้างโครงการบริจาคใหม่: "${projectName}"`;
-        const notifyQuery = `
-      INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
-      VALUES (?, ?, ?, ?, NOW(), 'ยังไม่อ่าน')
-    `;
-        const notifyValues = [1, 'donate-request', notifyMessage, projectId];
-        await queryAsync(notifyQuery, notifyValues);
+        // บันทึก System log
+        await SystemlogAction(
+            userId,
+            'DonationProject', // moduleName
+            'CREATE',          // actionType
+            `สร้างโครงการบริจาค: "${projectName}" สถานะ: ${status}`, // description
+            ipAddress,
+            projectId          // relatedId
+        );
 
-        //ตอบกลับสำเร็จ
+        // ตอบกลับสำเร็จ
         res.status(200).json({
             success: true,
             message: 'สร้างโครงการบริจาคเรียบร้อยแล้ว',
@@ -207,6 +245,7 @@ const queryAsync = (query, values = []) => {
 route.post('/donation', upload.single('slip'), async (req, res) => {
     try {
         const userId = req.session.user?.id;
+        const ipAddress = req.ip;
 
         if (!userId) {
             return res.status(400).json({ error: 'User ID is required' });
@@ -224,15 +263,12 @@ route.post('/donation', upload.single('slip'), async (req, res) => {
             useExistingTax,
             taxId,
             purpose,
-
         } = req.body;
 
         const normalizeValue = (val) => Array.isArray(val) ? val[0] : val;
-
         const normUseTax = normalizeValue(useTax);
         const normUseExistingTax = normalizeValue(useExistingTax);
         const normTaxId = normalizeValue(taxId);
-
         const useTaxBool = normUseTax === "1" || normUseTax === 1 || normUseTax === true;
         const useExistingTaxBool = normUseExistingTax === "1" || normUseExistingTax === 1 || normUseExistingTax === true;
         const taxIdNum = normTaxId ? Number(normTaxId) : null;
@@ -245,67 +281,81 @@ route.post('/donation', upload.single('slip'), async (req, res) => {
             return res.status(400).json({ error: "จำนวนเงินไม่ถูกต้อง" });
         }
 
+        // จัดการใบกำกับภาษี
         if (useTaxBool) {
             if (useExistingTaxBool && taxIdNum) {
                 const [existingTax] = await queryAsync(
-                    `SELECT tax_id 
-                    FROM tax_addresses 
-                    WHERE tax_id = ? AND user_id = ? AND deleted_at IS NULL
-                    `,
+                    `SELECT tax_id FROM tax_addresses WHERE tax_id = ? AND user_id = ? AND deleted_at IS NULL`,
                     [taxIdNum, userId]
                 );
-
                 if (!existingTax) {
                     return res.status(400).json({ error: 'ไม่พบข้อมูลใบกำกับภาษีที่เลือก' });
                 }
-
                 finalTaxId = existingTax.tax_id;
             } else {
                 if (!name || !tax_number) {
                     return res.status(400).json({ error: 'กรุณากรอกข้อมูลใบกำกับภาษีให้ครบถ้วน' });
                 }
-
                 const insertTaxQuery = `
-                INSERT INTO tax_addresses (user_id, name, tax_number, email, phone, type_tax)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO tax_addresses (user_id, name, tax_number, email, phone, type_tax)
+                    VALUES (?, ?, ?, ?, ?, ?)
                 `;
                 const insertResult = await queryAsync(insertTaxQuery, [
-                    userId,
-                    name,
-                    tax_number,
-                    email || null,
-                    phone || null,
-                    type_tax || "individual"
+                    userId, name, tax_number, email || null, phone || null, type_tax || "individual"
                 ]);
-
                 finalTaxId = insertResult.insertId;
             }
         }
 
         const taxStatus = useTaxBool ? "requested" : "none";
 
-        // Insert donation
+        // ดึงชื่อโครงการ (ถ้ามี)
+        let projectName = "บริจาคทั่วไป";
+        if (projectId) {
+            const [proj] = await queryAsync(`SELECT project_name FROM donationproject WHERE project_id = ?`, [projectId]);
+            projectName = proj ? proj.project_name : projectName;
+        }
+
+        // บันทึก donation
         const insertDonationQuery = `
-        INSERT INTO donations
-        (project_id, user_id, amount,purpose, payment_status, slip, tax_id, use_tax, tax_status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO donations
+            (project_id, user_id, amount, purpose, payment_status, slip, tax_id, use_tax, tax_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
         const donationResult = await queryAsync(insertDonationQuery, [
-            projectId || null, // ถ้าไม่มีโครงการ ให้เป็น NULL
-            userId,
-            amountNum,
-            purpose,
-            'pending',
-            slip,
-            finalTaxId,
-            useTaxBool ? "1" : "0",
-            taxStatus
+            projectId || null, userId, amountNum, purpose, 'pending', slip, finalTaxId,
+            useTaxBool ? "1" : "0", taxStatus
         ]);
+
+        const donationId = donationResult.insertId;
+
+        // แจ้งเตือน admin
+        const adminUsers = await queryAsync(`SELECT user_id FROM users WHERE role_id = 1`);
+        const now = new Date();
+        const notificationMessage = `มีการบริจาคใหม่ในโครงการ "${projectName}" จำนวน ${amountNum.toLocaleString()} บาท`;
+
+        for (const admin of adminUsers) {
+            await queryAsync(
+                `INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
+                 VALUES (?, ?, ?, ?, ?, ?)`,
+                [admin.user_id, 'donation', notificationMessage, donationId, now, 'ยังไม่อ่าน']
+            );
+        }
+
+        // บันทึก System log
+        await SystemlogAction(
+            userId,
+            'Donation', // moduleName
+            'CREATE',   // actionType
+            `มีการบริจาคใหม่ จำนวน ${amountNum.toLocaleString()} บาท โครงการ: "${projectName}"`, // description
+            ipAddress,
+            donationId // relatedId
+        );
 
         return res.status(200).json({
             success: true,
             message: 'Donation completed successfully',
-            donationId: donationResult.insertId
+            donationId
         });
 
     } catch (err) {
@@ -314,100 +364,6 @@ route.post('/donation', upload.single('slip'), async (req, res) => {
     }
 });
 
-//การบริจาค
-// route.post('/donation', upload.single('slip'), async (req, res) => {
-//     try {
-//         const {
-//             amount,
-//             userId,
-//             projectId,
-//             name,
-//             tax_number,
-//             email,
-//             phone,
-//             type_tax,
-//             useTax,
-//             useExistingTax,
-//             taxId
-//         } = req.body;
-
-//         console.log("Full req.body:", req.body); 
-
-//         const slip = req.file ? req.file.filename : null;
-//         // console.log("Uploaded file:", slip);
-
-//         // แปลง useTax เป็น boolean ใเอาใบกำกับภาษี
-//         const useTaxBool = useTax === "1" || useTax === 1 || useTax === true;
-
-//         let finalTaxId = null;
-
-//         //จัดการใบกำกับภาษี
-//         if (useTaxBool) {
-//             if (useExistingTax && taxId) {
-//                 // ใช้ tax record ที่เลือก
-//                 const taxIdNum = Array.isArray(taxId) ? taxId[0] : Number(taxId);
-//                 const existingTax = await queryAsync(
-//                     `SELECT tax_id 
-//                     FROM tax_addresses 
-//                     WHERE tax_id = ? AND user_id = ? AND deleted_at IS NULL`,
-//                     [taxIdNum, userId]
-//                 );
-
-//                 if (existingTax.length > 0) {
-//                     finalTaxId = existingTax[0].tax_id;
-//                 } else {
-//                     return res.status(400).json({ error: 'Tax record not found' });
-//                 }
-//             } else {
-//                 // ตรวจสอบข้อมูลภาษีก่อน insert
-//                 if (!name || !tax_number) {
-//                     return res.status(400).json({ error: `Incomplete tax information for ${type_tax || "tax"}` });
-//                 }
-
-//                 //สร้าง tax record ใหม่
-//                 const insertTaxQuery = `
-//                     INSERT INTO tax_addresses (user_id, name, tax_number, email, phone, type_tax)
-//                     VALUES (?, ?, ?, ?, ?, ?)
-//                 `;
-//                 const insertResult = await queryAsync(insertTaxQuery, [
-//                     userId,
-//                     name,
-//                     tax_number,
-//                     email || null,
-//                     phone || null,
-//                     type_tax || "individual" // กันค่า null
-//                 ]);
-//                 finalTaxId = insertResult.insertId;
-//             }
-//         }
-
-//         // บันทึกการบริจาค
-//         const insertDonationQuery = `
-//             INSERT INTO donations
-//             (project_id, user_id, amount, payment_status, slip, tax_id, use_tax)
-//             VALUES (?, ?, ?, ?, ?, ?, ?)
-//         `;
-//         const donationResult = await queryAsync(insertDonationQuery, [
-//             projectId,
-//             userId,
-//             amount,
-//             'pending',
-//             slip,
-//             finalTaxId,                 // ถ้าไม่มี tax → null
-//             useTaxBool ? "1" : "0"      // เก็บ 0/1
-//         ]);
-
-//         return res.status(200).json({
-//             success: true,
-//             message: 'Donation completed successfully',
-//             donationId: donationResult.insertId
-//         });
-
-//     } catch (err) {
-//         console.error("Donation error:", err);
-//         return res.status(500).json({ error: 'Internal server error' });
-//     }
-// });
 
 route.get("/tax_addresses/user/:userId", async (req, res) => {
     const { userId } = req.params;
@@ -578,7 +534,9 @@ route.get('/donation-summary', (req, res) => {
 
 // รายละเอียดการบริจาคแยกตามประเภท [ที่เพิ่ม]
 route.get('/donation-summary-details/:type?', (req, res) => {
-    const { type } = req.query;
+    const { type } = req.params;
+    // console.log("Received type:", type);
+    // console.log("Received filters:", req.query);
 
     let whereClause = "";
     if (type === "general") {
@@ -586,7 +544,6 @@ route.get('/donation-summary-details/:type?', (req, res) => {
     } else if (type === "project") {
         whereClause = "WHERE d.project_id IS NOT NULL";
     }
-
 
     const query = `
         SELECT 
@@ -601,12 +558,197 @@ route.get('/donation-summary-details/:type?', (req, res) => {
         FROM donations d
         LEFT JOIN donationproject dp ON d.project_id = dp.project_id
         LEFT JOIN profiles p ON d.user_id = p.user_id
-        ${whereClause}
-        WHERE d.payment_status = 'paid'
+        ${whereClause} ${whereClause ? "AND" : "WHERE"} d.payment_status = 'paid'
         ORDER BY d.created_at DESC
     `;
 
     db.query(query, (err, results) => {
+        if (err) {
+            console.error("Database error:", err);
+            return res.status(500).json({ error: "Database query failed" });
+        }
+
+        const safeResults = results.map(r => ({
+            ...r,
+            amount: parseFloat(r.amount),
+            project_name: r.project_name
+        }));
+
+        res.json(safeResults);
+    });
+});
+
+
+
+// 1. รายละเอียดบริจาคโครงการ
+route.get('/donation-summary-details/project', (req, res) => {
+    const { startDate, endDate, minAmount, maxAmount } = req.query;
+
+    let conditions = [
+        "d.payment_status = 'paid'",
+        "d.project_id IS NOT NULL"  // เฉพาะบริจาคโครงการ
+    ];
+    const params = [];
+
+    if (startDate) {
+        conditions.push("DATE(d.created_at) >= ?");
+        params.push(startDate);
+    }
+
+    if (endDate) {
+        conditions.push("DATE(d.created_at) <= ?");
+        params.push(endDate);
+    }
+
+    if (minAmount) {
+        conditions.push("d.amount >= ?");
+        params.push(parseFloat(minAmount));
+    }
+
+    if (maxAmount) {
+        conditions.push("d.amount <= ?");
+        params.push(parseFloat(maxAmount));
+    }
+
+    const query = `
+        SELECT 
+            d.donation_id,
+            dp.project_id,
+            dp.project_name,
+            p.full_name,
+            p.image_path,
+            d.amount,
+            d.payment_status,
+            d.created_at AS donation_date
+        FROM donations d
+        INNER JOIN donationproject dp ON d.project_id = dp.project_id
+        LEFT JOIN profiles p ON d.user_id = p.user_id
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY d.created_at DESC
+    `;
+
+    db.query(query, params, (err, results) => {
+        if (err) {
+            console.error("Database error:", err);
+            return res.status(500).json({ error: "Database query failed" });
+        }
+
+        const safeResults = results.map(r => ({
+            ...r,
+            amount: parseFloat(r.amount),
+            project_name: r.project_name
+        }));
+
+        res.json(safeResults);
+    });
+});
+
+// 2. รายละเอียดบริจาคทั่วไป
+route.get('/donation-summary-details/general', (req, res) => {
+    const { startDate, endDate, minAmount, maxAmount } = req.query;
+
+    let conditions = [
+        "d.payment_status = 'paid'",
+        "d.project_id IS NULL"  // เฉพาะบริจาคทั่วไป
+    ];
+    const params = [];
+
+    if (startDate) {
+        conditions.push("DATE(d.created_at) >= ?");
+        params.push(startDate);
+    }
+
+    if (endDate) {
+        conditions.push("DATE(d.created_at) <= ?");
+        params.push(endDate);
+    }
+
+    if (minAmount) {
+        conditions.push("d.amount >= ?");
+        params.push(parseFloat(minAmount));
+    }
+
+    if (maxAmount) {
+        conditions.push("d.amount <= ?");
+        params.push(parseFloat(maxAmount));
+    }
+
+    const query = `
+        SELECT 
+            d.donation_id,
+            NULL as project_id,
+            NULL as project_name,
+            p.full_name,
+            p.image_path,
+            d.amount,
+            d.payment_status,
+            d.created_at AS donation_date
+        FROM donations d
+        LEFT JOIN profiles p ON d.user_id = p.user_id
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY d.created_at DESC
+    `;
+
+    db.query(query, params, (err, results) => {
+        if (err) {
+            console.error("Database error:", err);
+            return res.status(500).json({ error: "Database query failed" });
+        }
+
+        const safeResults = results.map(r => ({
+            ...r,
+            amount: parseFloat(r.amount)
+        }));
+
+        res.json(safeResults);
+    });
+});
+
+// 3. รายละเอียดบริจาคทั้งหมด
+route.get('/donation-summary-details/all', (req, res) => {
+    const { startDate, endDate, minAmount, maxAmount } = req.query;
+
+    let conditions = ["d.payment_status = 'paid'"];
+    const params = [];
+
+    if (startDate) {
+        conditions.push("DATE(d.created_at) >= ?");
+        params.push(startDate);
+    }
+
+    if (endDate) {
+        conditions.push("DATE(d.created_at) <= ?");
+        params.push(endDate);
+    }
+
+    if (minAmount) {
+        conditions.push("d.amount >= ?");
+        params.push(parseFloat(minAmount));
+    }
+
+    if (maxAmount) {
+        conditions.push("d.amount <= ?");
+        params.push(parseFloat(maxAmount));
+    }
+
+    const query = `
+        SELECT 
+            d.donation_id,
+            dp.project_id,
+            dp.project_name,
+            p.full_name,
+            p.image_path,
+            d.amount,
+            d.payment_status,
+            d.created_at AS donation_date
+        FROM donations d
+        LEFT JOIN donationproject dp ON d.project_id = dp.project_id
+        LEFT JOIN profiles p ON d.user_id = p.user_id
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY d.created_at DESC
+    `;
+
+    db.query(query, params, (err, results) => {
         if (err) {
             console.error("Database error:", err);
             return res.status(500).json({ error: "Database query failed" });

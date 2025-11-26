@@ -5,7 +5,7 @@ var { LoggedIn, checkActiveUser } = require('../middlewares/auth');
 const bcrypt = require('bcryptjs');
 var multer = require('multer');
 const path = require('path');
-const { logWebboard } = require('../logUserAction');
+const { SystemlogAction } = require('../logUserAction');
 const util = require('util'); // เพิ่มบนสุดของไฟล์
 const dbQuery = util.promisify(db.query).bind(db); // แปลง db.query เป็น promise 
 
@@ -32,67 +32,40 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 },  // จำกัดขนาดไฟล์ 5MB
 });
 
-// router.get('/users/me', (req, res) => {
-//   if (req.session.user) {
-//     return res.json({ success: true, user: req.session.user });
-//   }
-//   res.status(401).json({ success: false, message: "Not logged in" });
-// });
-
 
 router.get('/profile', LoggedIn, checkActiveUser, (req, res) => {
   if (!req.session.user || !req.session.user.id) {
     return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
   }
 
-  const userId = req.session.user?.id;
+  const userId = req.session.user.id;
 
-  // ดึงข้อมูลโปรไฟล์หลัก
+  // ดึง profile พร้อม profiles_id
   const profileQuery = `
-      SELECT 
-          users.user_id, 
-          users.role_id, 
-          profiles.full_name, 
-          profiles.image_path,
-          profiles.nick_name,
-          profiles.title,
-          profiles.birthday,
-          profiles.self_description,
-          profiles.address,
-          profiles.phone,
-          profiles.email,
-          profiles.line,
-          alumni.major_id,
-          major.major_name AS alumni_major_name
-      FROM users
-      JOIN profiles ON users.user_id = profiles.user_id
-      LEFT JOIN alumni ON users.user_id = alumni.user_id
-      LEFT JOIN major ON alumni.major_id = major.major_id
-      WHERE users.user_id = ? 
+    SELECT 
+        users.user_id, 
+        users.role_id, 
+        profiles.profiles_id,
+        profiles.full_name, 
+        profiles.image_path,
+        profiles.nick_name,
+        profiles.title,
+        profiles.birthday,
+        profiles.self_description,
+        profiles.address,
+        profiles.phone,
+        profiles.email,
+        profiles.line,
+        alumni.major_id,
+        major.major_name AS alumni_major_name
+    FROM users
+    JOIN profiles ON users.user_id = profiles.user_id
+    LEFT JOIN alumni ON users.user_id = alumni.user_id
+    LEFT JOIN major ON alumni.major_id = major.major_id
+    WHERE users.user_id = ?
   `;
-
-  // ดึงข้อมูล educations ของ user
-  const educationQuery = `
-      SELECT 
-          educations.education_id,
-          educations.degree_id,
-          degree.degree_name,
-          educations.major_id,
-          major.major_name AS education_major_name,
-          educations.studentId,
-          educations.graduation_year,
-          educations.entry_year,
-          educations.student_year
-      FROM educations
-      LEFT JOIN degree ON educations.degree_id = degree.degree_id
-      LEFT JOIN major ON educations.major_id = major.major_id
-      WHERE educations.user_id = ?
-  `;
-
-  // console.log('Session in /profile:', req.session.user);
 
   db.query(profileQuery, [userId], (err, profileResults) => {
-  
     if (err) {
       console.error('Database error (profile):', err);
       return res.status(500).json({ success: false, message: 'Database error' });
@@ -103,13 +76,33 @@ router.get('/profile', LoggedIn, checkActiveUser, (req, res) => {
     }
 
     const userProfile = profileResults[0];
+    const profileId = userProfile.profiles_id; 
 
-    db.query(educationQuery, [userId], (err, educationResults) => {
+    // ดึงข้อมูลการศึกษาจาก profiles_id 
+    const educationQuery = `
+      SELECT 
+          e.education_id,
+          e.degree_id,
+          d.degree_name,
+          e.major_id,
+          m.major_name AS education_major_name,
+          e.studentId,
+          e.graduation_year,
+          e.entry_year,
+          e.student_year
+      FROM educations e
+      LEFT JOIN degree d ON e.degree_id = d.degree_id
+      LEFT JOIN major m ON e.major_id = m.major_id
+      WHERE e.profiles_id = ?
+    `;
+
+    db.query(educationQuery, [profileId], (err, educationResults) => {
       if (err) {
         console.error('Database error (educations):', err);
         return res.status(500).json({ success: false, message: 'Database error' });
       }
 
+      // ส่งข้อมูลกลับไป
       res.json({
         success: true,
         user: {
@@ -123,13 +116,13 @@ router.get('/profile', LoggedIn, checkActiveUser, (req, res) => {
           phone: userProfile.phone,
           email: userProfile.email,
           line: userProfile.line,
-          image_path: userProfile.image_path, 
-          profilePicture: userProfile.image_path 
-            ? `http://10.198.200.71/api/${userProfile.image_path.replace(/^\/+/, '')}` 
-            : 'http://10.198.200.71/api/uploads/default-profile.png',
-  //  profilePicture: userProfile.image_path 
-  // ? `http://10.198.200.71/${userProfile.image_path.replace(/^\/+/, '')}` 
-  // : 'http://10.198.200.71/api/uploads/default-profile.png',
+          image_path: userProfile.image_path,
+          // profilePicture: userProfile.image_path 
+          //   ? `http://10.198.200.71/api/${userProfile.image_path.replace(/^\/+/, '')}` 
+          //   : 'http://10.198.200.71/api/uploads/default-profile.png',
+          profilePicture: userProfile.image_path
+            ? `http://localhost:3001/${userProfile.image_path.replace(/^\/+/, '')}`
+            : 'http://localhost:3001/uploads/default-profile.png',
           role: userProfile.role_id,
           educations: educationResults.map(edu => ({
             education_id: edu.education_id,
@@ -181,7 +174,7 @@ router.post('/edit-profile', (req, res) => {
     return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
   }
 
-  const userId = req.session.user?.id;
+  const userId = req.session.user.id;
 
   const profileSql = `
     UPDATE profiles SET 
@@ -213,12 +206,10 @@ router.post('/edit-profile', (req, res) => {
             console.error('เกิดข้อผิดพลาดในการอัปเดตรหัสผ่าน:', err);
             return res.status(500).json({ message: 'อัปเดตรหัสผ่านไม่สำเร็จ' });
           }
-          // ถัดไปอัปเดต major และ educations หลังจากอัปเดตรหัสผ่านเสร็จ
           updateMajorAndEducations();
         });
       });
     } else {
-      // ถ้าไม่มีเปลี่ยนรหัสผ่านก็อัปเดต major และ educations ต่อเลย
       updateMajorAndEducations();
     }
 
@@ -249,9 +240,10 @@ router.post('/edit-profile', (req, res) => {
         const studYear = student_year?.trim() || null;
 
         if (education_id) {
+          // 🔸 เปลี่ยน WHERE user_id → WHERE profiles_id
           let updateSql = `
-        UPDATE educations SET 
-          degree_id = ?, major_id = ?, studentId = ?, graduation_year = ?, entry_year = ?`;
+            UPDATE educations SET 
+              degree_id = ?, major_id = ?, studentId = ?, graduation_year = ?, entry_year = ?`;
 
           const updateValues = [degree || null, eduMajor || null, studentId || null, gradYear, entryYear];
 
@@ -260,7 +252,7 @@ router.post('/edit-profile', (req, res) => {
             updateValues.push(studYear);
           }
 
-          updateSql += ` WHERE education_id = ? AND user_id = ?`;
+          updateSql += ` WHERE education_id = ? AND profiles_id = ?`;
           updateValues.push(education_id, userId);
 
           return new Promise((resolve, reject) => {
@@ -274,12 +266,12 @@ router.post('/edit-profile', (req, res) => {
             });
           });
         } else {
-          // INSERT ต้อง return new Promise ด้วยเช่นกัน
+          // 🔸 INSERT ให้ใส่ profiles_id แทน user_id
           return new Promise((resolve, reject) => {
             const insertSql = `
-          INSERT INTO educations 
-            (user_id, degree_id, major_id, studentId, graduation_year, entry_year${parseInt(role_id) === 4 ? ', student_year' : ''})
-          VALUES (?, ?, ?, ?, ?, ?${parseInt(role_id) === 4 ? ', ?' : ''})`;
+              INSERT INTO educations 
+                (profiles_id, degree_id, major_id, studentId, graduation_year, entry_year${parseInt(role_id) === 4 ? ', student_year' : ''})
+              VALUES (?, ?, ?, ?, ?, ?${parseInt(role_id) === 4 ? ', ?' : ''})`;
 
             const insertValues = parseInt(role_id) === 4
               ? [userId, degree || null, eduMajor || null, studentId || null, gradYear || null, entryYear || null, studYear || null]
@@ -305,31 +297,45 @@ router.post('/edit-profile', (req, res) => {
           res.status(500).json({ message: 'เกิดข้อผิดพลาดในการแก้ไขข้อมูลการศึกษา' });
         });
     }
-
   });
 });
 
 
-// อัปโหลดรูปภาพโปรไฟล์
 router.post('/update-profile-image', upload.single('image_path'), async (req, res) => {
-  // const userId = req.body.user_id;
-  const user_id = req.session.user?.user_id;
-  const image_path = `uploads/${req.file.filename}`;
+  const user_id = req.session.user?.id;
+  // const { user_id } = req.body;
+  const file = req.file;
 
-  // if (!user_id || !image_path) {
-  //   return res.status(400).json({ message: 'ข้อมูลไม่ครบถ้วน' });
-  // }
+  console.log("user_id:", user_id);
+  console.log("file:", file);
+
+  if (!user_id) {
+    return res.status(401).json({ message: 'ไม่ได้เข้าสู่ระบบ' });
+  }
+
+  if (!file) {
+    return res.status(400).json({ message: 'กรุณาอัปโหลดรูปภาพ' });
+  }
+
+  const image_path = `uploads/${file.filename}`;
 
   try {
-    const query = 'UPDATE profiles SET image_path = ? WHERE user_id = ?';
-    await db.promise().query(query, [image_path, user_id]);
+    const [result] = await db.promise().query(
+      'UPDATE profiles SET image_path = ? WHERE user_id = ?',
+      [image_path, user_id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'ไม่พบผู้ใช้ หรือไม่มีการอัปเดต' });
+    }
 
     res.status(200).json({ message: 'อัปเดตรูปสำเร็จ', newImagePath: image_path });
   } catch (err) {
-    console.error(err);
+    console.error("Error updating profile image:", err);
     res.status(500).json({ message: 'อัปเดตรูปไม่สำเร็จ' });
   }
 });
+
 
 //กระทู้ที่เคยสร้าง
 router.get('/webboard-user/:userId', (req, res) => {
@@ -363,7 +369,6 @@ router.get('/webboard-user/:userId', (req, res) => {
       console.error('เกิดข้อผิดพลาดในการดึงกระทู้:', err);
       return res.status(500).json({ success: false, message: 'Database error' });
     }
-    // console.log("Webboard Results:", results);
 
     if (results.length === 0) {
       return res.status(404).json({ success: false, message: 'ไม่พบกระทู้ของผู้ใช้คนนี้' });
@@ -398,10 +403,7 @@ router.get('/webboard/:webboardId', (req, res) => {
 router.put('/edit-webboard/:webboardId', upload.single("image"), (req, res) => {
   const { webboardId } = req.params;
   const userId = req.session.user?.id;
-
-  //   if (!req.session || !req.session.user || !req.session.user.id) {
-  //     return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
-  // }
+  const ipAddress = req.ip; 
 
   const { title, content, category_id } = req.body;
   const image_path = req.file ? req.file.path : null;
@@ -430,7 +432,14 @@ router.put('/edit-webboard/:webboardId', upload.single("image"), (req, res) => {
       return res.status(404).json({ success: false, message: 'ไม่พบกระทู้ หรือกระทู้ถูกลบแล้ว' });
     }
 
-    logWebboard(userId, webboardId, 'แก้ไขกระทู้'); 
+        SystemlogAction(
+            userId, // ID ของผู้กระทำ
+            'Webboard', // moduleName
+            'UPDATE',   // actionType: แก้ไขข้อมูล
+            `ผู้ใช้ ${userId} แก้ไขกระทู้: ${webboardId}`, // description
+            ipAddress,
+            webboardId // relatedId
+        );
     return res.status(200).json({ success: true, message: 'แก้ไขกระทู้สำเร็จ!' });
   });
 });

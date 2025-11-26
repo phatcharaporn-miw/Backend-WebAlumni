@@ -4,7 +4,7 @@ var db = require('../db');
 var multer = require('multer');
 var path = require('path');
 var { LoggedIn, checkActiveUser } = require('../middlewares/auth');
-const { logNews }= require('../logUserAction'); 
+const { SystemlogAction }= require('../logUserAction'); 
 
 
 const storage = multer.diskStorage({
@@ -26,6 +26,7 @@ router.post('/create-news', upload.array('images'), (req, res) => {
   }
 
   const userId = req.session.user?.id; 
+  const ipAddress = req.ip;
   const { title, content } = req.body; 
   const imagePaths = req.files.map(file => `/uploads/${file.filename}`); 
 
@@ -63,7 +64,15 @@ router.post('/create-news', upload.array('images'), (req, res) => {
         return res.status(500).json({ message: 'ข่าวประชาสัมพันธ์ถูกเพิ่ม แต่บันทึกรูปไม่สำเร็จ' });
       }
 
-      logNews(userId, newsId, 'เพิ่มข่าวประชาสัมพันธ์');
+      // บันทึก System Log
+        SystemlogAction(
+            userId, // ID ของผู้กระทำ (Admin)
+            'News', // moduleName
+            'CREATE',  // actionType
+            `เพิ่มข่าวประชาสัมพันธ์`, // description
+            ipAddress,
+            newsId // relatedId
+        );
       res.status(200).json({ message: 'เพิ่มข่าวประชาสัมพันธ์เรียบร้อยแล้ว!' });
     });
   });
@@ -166,6 +175,7 @@ router.get('/news-id/:newsId', (req, res) => {
 router.put('/edit-news/:newsId', LoggedIn, checkActiveUser, upload.array('images'), (req, res) => {
     const { newsId } = req.params;
     const userId = req.session.user?.id;
+    const ipAddress = req.ip;
 
     if (!req.session.user || !req.session.user.id) {
         return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
@@ -198,7 +208,15 @@ router.put('/edit-news/:newsId', LoggedIn, checkActiveUser, upload.array('images
 
         if (imagePaths.length === 0) {
             // หากไม่มีรูปภาพใหม่
-            logNews(userId, newsId, 'แก้ไขข่าวประชาสัมพันธ์');
+            // บันทึก System Log
+        SystemlogAction(
+            userId, // ID ของผู้กระทำ (Admin)
+            'News', // moduleName
+            'UPDATE',  // actionType
+            `แก้ไขข่าวประชาสัมพันธ์`, // description
+            ipAddress,
+            newsId // relatedId
+        );
             return res.status(200).json({ success: true, message: 'แก้ไขข่าวประชาสัมพันธ์เรียบร้อย (ไม่มีรูปใหม่)' });
         }
 
@@ -223,7 +241,15 @@ router.put('/edit-news/:newsId', LoggedIn, checkActiveUser, upload.array('images
                     return res.status(500).json({ success: false, message: 'เกิดข้อผิดพลาดในการเพิ่มรูปภาพใหม่' });
                 }
 
-                logNews(userId, newsId, 'แก้ไขข่าวประชาสัมพันธ์และอัปเดตรูปภาพ');
+                // บันทึก System Log
+                SystemlogAction(
+                    userId, // ID ของผู้กระทำ (Admin)
+                    'News', // moduleName
+                    'UPDATE',  // actionType
+                    `แก้ไขข่าวประชาสัมพันธ์และอัปเดตรูปภาพ`, // description
+                    ipAddress,
+                    newsId // relatedId
+                );
                 res.status(200).json({ success: true, message: 'แก้ไขข่าวประชาสัมพันธ์และรูปภาพเรียบร้อยแล้ว!' });
             });
         });
@@ -234,6 +260,7 @@ router.put('/edit-news/:newsId', LoggedIn, checkActiveUser, upload.array('images
 // ลบข่าวประชาสัมพันธ์แบบ Soft Delete
 router.delete('/delete-news/:newsId', LoggedIn, checkActiveUser, (req, res) => {
   const { newsId } = req.params;
+  const ipAddress = req.ip;
 
   if (!req.session.user || !req.session.user.id) {
       return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
@@ -257,7 +284,15 @@ router.delete('/delete-news/:newsId', LoggedIn, checkActiveUser, (req, res) => {
           return res.status(404).json({ success: false, message: 'ไม่พบข่าวประชาสัมพันธ์ที่ต้องการลบ' });
       }
 
-      logNews(userId, newsId, 'ลบข่าวประชาสัมพันธ์');
+      // บันทึก System Log
+        SystemlogAction(
+            userId, // ID ของผู้กระทำ (Admin)
+            'News', // moduleName
+            'DELETE',  // actionType
+            `ลบข่าวประชาสัมพันธ์`, // description
+            ipAddress,
+            newsId // relatedId
+        );
 
       res.status(200).json({ success: true, message: 'ลบข่าวประชาสัมพันธ์เรียบร้อยแล้ว!' });
   });

@@ -4,10 +4,8 @@ const multer = require('multer');
 const path = require('path');
 const db = require('../db');
 const moment = require('moment');
-var { LoggedIn, checkActiveUser } = require('../middlewares/auth');
-const { logManage, logDonation } = require('../logUserAction');
-const { log } = require("console");
-const ORDER_STATUS = require("../orderStatus");
+const { SystemlogAction } = require('../logUserAction');
+
 
 // ตั้งค่า Multer สำหรับอัปโหลดไฟล์
 const storage = multer.diskStorage({
@@ -34,41 +32,24 @@ router.get('/donate', (req, res) => {
 });
 
 // ดึงรายละเอียดโครงการ
-// router.get('/donatedetail/:id', (req, res) => {
-//     const projectId = req.params.id;
-//     const query = 'SELECT * FROM donationproject WHERE project_id = ?';
-
-//     db.query(query, [projectId], (err, results) => {
-//         if (err) {
-//             console.error('Error fetching project details:', err);
-//             return res.status(500).json({ error: 'Error fetching project details' });
-//         }
-//         if (results.length === 0) {
-//             return res.status(404).json({ error: 'Project not found' });
-//         }
-//         res.status(200).json(results[0]);
-//     });
-// });
-
-// ดึงรายละเอียดโครงการและข้อมูลธนาคาร
 router.get('/donatedetail/:id', (req, res) => {
     const projectId = req.params.id;
 
     const query = `
         SELECT 
-            dp.*, 
-            pm.method_name,
-            pm.bank_name, 
-            pm.account_name, 
-            pm.account_number, 
-            pm.promptpay_number,
-            pm.is_official
-        FROM 
-            donationproject dp
-        JOIN 
-            payment_methods pm ON dp.payment_method_id = pm.payment_method_id
-        WHERE 
-            dp.project_id = ?
+            dp.*,
+            pm.bank_name,
+            pm.account_name,
+            pm.account_number,
+            pm.promptpay_number
+        FROM donationproject dp
+        CROSS JOIN (
+            SELECT bank_name, account_name, account_number, promptpay_number 
+            FROM payment_methods 
+            WHERE is_official = 1 
+            LIMIT 1
+        ) pm
+        WHERE dp.project_id = ?
     `;
 
     db.query(query, [projectId], (err, results) => {
@@ -81,84 +62,6 @@ router.get('/donatedetail/:id', (req, res) => {
         }
 
         res.status(200).json(results[0]);
-    });
-});
-
-
-// อนุมัติการบริจาคให้ตั้งโครงการ
-router.put('/approveDonate/:id', (req, res) => {
-    const projectId = req.params.id;
-    const query = 'UPDATE donationproject SET status = "1" WHERE project_id = ?';
-    db.query(query, [projectId], (err, result) => {
-        if (err) {
-            console.error('Error updating project status:', err);
-            return res.status(500).json({ error: 'Database error' });
-        }
-        if (result.affectedRows === 0) {
-            return res.status(404).json({ error: 'Project not found or already approved' });
-        }
-        console.log(`Project ${projectId} approved successfully`);
-        res.status(200).json({
-            message: 'Project approved successfully',
-            projectId: projectId
-        });
-    });
-});
-
-// อนุมัติการบริจาคให้ตั้งโครงการ
-router.put('/approveDonate/:id', (req, res) => {
-    const projectId = req.params.id;
-
-    // อัปเดตสถานะโครงการ
-    const query = 'UPDATE donationproject SET status = "1" WHERE project_id = ?';
-    db.query(query, [projectId], (err, result) => {
-        if (err) {
-            console.error('Error updating project status:', err);
-            return res.status(500).json({ error: 'Database error' });
-        }
-        if (result.affectedRows === 0) {
-            return res.status(404).json({ error: 'Project not found or already approved' });
-        }
-
-        console.log(`Project ${projectId} approved successfully`);
-
-        // ดึง user_id ของผู้ตั้งโครงการ
-        const getUserQuery = 'SELECT user_id, project_name FROM donationproject WHERE project_id = ?';
-        db.query(getUserQuery, [projectId], (userErr, userResult) => {
-            if (userErr) {
-                console.error('Error fetching project owner:', userErr);
-                return res.status(500).json({ error: 'Database error' });
-            }
-
-            if (userResult.length === 0) {
-                return res.status(404).json({ error: 'Project not found after update' });
-            }
-
-            const userId = userResult[0].user_id;
-            const projectName = userResult[0].project_name;
-
-            const notifyQuery = `
-                INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
-                VALUES (?, 'อนุมัติโครงการ', ?, ?, NOW(), 'ยังไม่อ่าน')
-            `;
-            const notifyValues = [
-                userId,
-                `โครงการ "${projectName}" ของคุณได้รับการอนุมัติแล้ว`,
-                projectId
-            ];
-
-            db.query(notifyQuery, notifyValues, (notifyErr) => {
-                if (notifyErr) {
-                    console.error("Error inserting notification:", notifyErr);
-                }
-            });
-
-            // ส่ง response 
-            res.status(200).json({
-                message: 'Project approved and user notified successfully',
-                projectId: projectId
-            });
-        });
     });
 });
 
@@ -263,6 +166,85 @@ router.post('/donateRequest', upload.single('image'), (req, res) => {
 });
 
 // แก้ไขโครงการบริจาค
+// router.put('/editDonate/:id', upload.single('image'), (req, res) => {
+//     const projectId = req.params.id;
+//     const {
+//         project_name,
+//         description,
+//         target_amount,
+//         start_date,
+//         end_date,
+//         donation_type,
+//         current_amount,
+//         payment_method_id 
+//     } = req.body;
+
+//     db.query('SELECT status, start_date, end_date FROM donationproject WHERE project_id = ?', [projectId], (err, result) => {
+//         if (err) {
+//             console.error('Error fetching project status:', err);
+//             return res.status(500).json({ success: false, error: 'Database error' });
+//         }
+
+//         if (result.length === 0) {
+//             return res.status(404).json({ success: false, error: 'Project not found' });
+//         }
+
+//         const oldStatus = parseInt(result[0].status);
+//         let newStatus = oldStatus;
+
+//         // ตรวจสอบโครงการสิ้นสุด
+//         if (oldStatus === 3) {
+//             if (start_date !== result[0].start_date || end_date !== result[0].end_date) {
+//                 return res.status(400).json({
+//                     success: false,
+//                     error: 'โครงการสิ้นสุดแล้ว ไม่สามารถแก้ไขได้'
+//                 });
+//             }
+//         } else {
+//             const now = moment();
+//             const startDate = moment(start_date);
+//             const endDate = moment(end_date);
+
+//             if (now.isBefore(startDate)) newStatus = 0;
+//             else if (now.isBetween(startDate, endDate, 'day', '[]')) newStatus = 1;
+//             else newStatus = 3;
+//         }
+
+//         // อัปเดต donationproject
+//         let query = `
+//       UPDATE donationproject
+//       SET project_name = ?, description = ?, target_amount = ?, start_date = ?, end_date = ?,
+//           donation_type = ?, current_amount = ?, payment_method_id = ?, status = ?
+//       ${req.file ? ', image_path = ?' : ''}
+//       WHERE project_id = ?
+//     `;
+
+//         const values = req.file
+//             ? [project_name, description, target_amount, start_date, end_date, donation_type, current_amount || 0, payment_method_id, newStatus, req.file.filename, projectId]
+//             : [project_name, description, target_amount, start_date, end_date, donation_type, current_amount || 0, payment_method_id, newStatus, projectId];
+
+//         db.query(query, values, (err, result) => {
+//             if (err) {
+//                 console.error('Error updating donation project:', err);
+//                 return res.status(500).json({ success: false, error: 'Error updating donation project' });
+//             }
+
+//             if (result.affectedRows === 0) {
+//                 return res.status(404).json({ success: false, error: 'Project not found' });
+//             }
+
+//             res.status(200).json({
+//                 success: true,
+//                 message: 'Donation project updated successfully',
+//                 projectId: projectId,
+//                 imageUpdated: !!req.file,
+//                 status: newStatus
+//             });
+//         });
+//     });
+// });
+
+
 router.put('/editDonate/:id', upload.single('image'), (req, res) => {
     const projectId = req.params.id;
     const {
@@ -273,7 +255,10 @@ router.put('/editDonate/:id', upload.single('image'), (req, res) => {
         end_date,
         donation_type,
         current_amount,
-        payment_method_id 
+        bank_name,
+        account_name,
+        account_number,
+        number_promtpay
     } = req.body;
 
     db.query('SELECT status, start_date, end_date FROM donationproject WHERE project_id = ?', [projectId], (err, result) => {
@@ -289,7 +274,7 @@ router.put('/editDonate/:id', upload.single('image'), (req, res) => {
         const oldStatus = parseInt(result[0].status);
         let newStatus = oldStatus;
 
-        // ตรวจสอบโครงการสิ้นสุด
+        // ห้ามแก้ไขโครงการที่สิ้นสุดแล้ว
         if (oldStatus === 3) {
             if (start_date !== result[0].start_date || end_date !== result[0].end_date) {
                 return res.status(400).json({
@@ -302,25 +287,25 @@ router.put('/editDonate/:id', upload.single('image'), (req, res) => {
             const startDate = moment(start_date);
             const endDate = moment(end_date);
 
-            if (now.isBefore(startDate)) newStatus = 0;
-            else if (now.isBetween(startDate, endDate, 'day', '[]')) newStatus = 1;
-            else newStatus = 3;
+            if (now.isBefore(startDate)) newStatus = 0; // ยังไม่เริ่ม
+            else if (now.isBetween(startDate, endDate, 'day', '[]')) newStatus = 1; // กำลังดำเนินการ
+            else newStatus = 3; // สิ้นสุด
         }
 
         // อัปเดต donationproject
-        let query = `
-      UPDATE donationproject
-      SET project_name = ?, description = ?, target_amount = ?, start_date = ?, end_date = ?,
-          donation_type = ?, current_amount = ?, payment_method_id = ?, status = ?
-      ${req.file ? ', image_path = ?' : ''}
-      WHERE project_id = ?
-    `;
+        let projectQuery = `
+            UPDATE donationproject
+            SET project_name = ?, description = ?, target_amount = ?, start_date = ?, end_date = ?,
+                donation_type = ?, current_amount = ?, status = ?
+            ${req.file ? ', image_path = ?' : ''}
+            WHERE project_id = ?
+        `;
 
-        const values = req.file
-            ? [project_name, description, target_amount, start_date, end_date, donation_type, current_amount || 0, payment_method_id, newStatus, req.file.filename, projectId]
-            : [project_name, description, target_amount, start_date, end_date, donation_type, current_amount || 0, payment_method_id, newStatus, projectId];
+        const projectValues = req.file
+            ? [project_name, description, target_amount, start_date, end_date, donation_type, current_amount || 0, newStatus, req.file.filename, projectId]
+            : [project_name, description, target_amount, start_date, end_date, donation_type, current_amount || 0, newStatus, projectId];
 
-        db.query(query, values, (err, result) => {
+        db.query(projectQuery, projectValues, (err, result) => {
             if (err) {
                 console.error('Error updating donation project:', err);
                 return res.status(500).json({ success: false, error: 'Error updating donation project' });
@@ -330,12 +315,30 @@ router.put('/editDonate/:id', upload.single('image'), (req, res) => {
                 return res.status(404).json({ success: false, error: 'Project not found' });
             }
 
-            res.status(200).json({
-                success: true,
-                message: 'Donation project updated successfully',
-                projectId: projectId,
-                imageUpdated: !!req.file,
-                status: newStatus
+            // อัปเดตข้อมูลธนาคาร (บัญชีหลัก is_official = 1)
+            const bankQuery = `
+                UPDATE payment_methods 
+                SET 
+                    bank_name = ?, 
+                    account_name = ?, 
+                    account_number = ?, 
+                    promptpay_number = ?
+                WHERE is_official = 1
+            `;
+
+            db.query(bankQuery, [bank_name, account_name, account_number, number_promtpay], (err2, result2) => {
+                if (err2) {
+                    console.error('Error updating bank info:', err2);
+                    return res.status(500).json({ success: false, error: 'Error updating bank info' });
+                }
+
+                res.status(200).json({
+                    success: true,
+                    message: 'Donation project and bank info updated successfully',
+                    projectId: projectId,
+                    imageUpdated: !!req.file,
+                    status: newStatus
+                });
             });
         });
     });
@@ -403,7 +406,7 @@ router.post("/donations/walk-in", (req, res) => {
 
             db.query(
                 `INSERT INTO tax_addresses (user_id, name, tax_number, email, phone, type_tax)
-         VALUES (NULL, ?, ?, ?, ?, ?)`,
+                VALUES (NULL, ?, ?, ?, ?, ?)`,
                 [name, tax_number, email || donor_email || null, phone || donor_phone || null, type_tax || "individual"],
                 (err, insertTaxResult) => {
                     if (err) return res.status(500).json({ message: "เกิดข้อผิดพลาด" });
@@ -421,7 +424,7 @@ router.post("/donations/walk-in", (req, res) => {
         const insertDonationQuery = `
       INSERT INTO donations 
       (project_id, user_id, tax_id, use_tax, donor_name, donor_phone, donor_email, donor_address,
-       amount, purpose, note, payment_method, payment_status, donation_type, tax_status, created_at)
+      amount, purpose, note, payment_method, payment_status, donation_type, tax_status, created_at)
       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
     `;
 
@@ -475,13 +478,37 @@ router.get('/projects/active', (req, res) => {
 // ตรวจสอบการชำระเงินบริจาคทั้งหมด[ที่เพิ่ม]
 router.get('/donate-lists', (req, res) => {
     const query = `
-        SELECT d.*,
-            dp.project_name,
-            p.full_name ,
-            p.email,
-            p.phone,
-            ta.*,
-            CONCAT('DONATE-', d.donation_id) AS order_number
+        SELECT 
+        d.donation_id,
+  d.project_id,
+  d.user_id,
+  d.tax_id,
+  d.donor_name,
+  d.donor_phone,
+  d.donor_email,
+  d.donor_address,
+  d.use_tax,
+  d.amount,
+  d.purpose,
+  d.note,
+  d.payment_status,
+  d.slip,
+  d.payment_method,
+  d.donation_type,
+  d.tax_status,
+  d.tax_file,
+  d.tax_sent_at,
+  d.reject_reason,
+  d.created_at AS donation_created_at, 
+       dp.project_name,
+       p.full_name ,
+       p.email AS profile_email,
+       p.phone AS profile_phone,
+       ta.*,
+       d.donor_name,
+       d.donor_email,
+       d.donor_phone,
+       d.donation_id AS order_number
         FROM donations d
         LEFT JOIN donationproject dp ON d.project_id = dp.project_id
         LEFT JOIN profiles p ON d.user_id = p.user_id
@@ -509,18 +536,23 @@ router.get('/check-payment-donate', (req, res) => {
             d.payment_status,
             d.slip,
             dp.project_name,
+            p.full_name AS donor_name,
+            d.donation_id AS order_number,
             pm.account_name,
             pm.bank_name,
             pm.account_number,
-            pm.promptpay_number,
-            p.full_name AS donor_name,
-            CONCAT('DONATE-', d.donation_id) AS order_number
+            pm.promptpay_number
         FROM donations d
         LEFT JOIN donationproject dp ON d.project_id = dp.project_id
-        LEFT JOIN payment_methods pm ON dp.payment_method_id = pm.payment_method_id
         LEFT JOIN profiles p ON d.user_id = p.user_id
+        LEFT JOIN (
+            SELECT * FROM payment_methods
+            WHERE is_official = 1 
+            LIMIT 1
+        ) pm ON 1=1
         WHERE d.deleted_at IS NULL 
-          AND d.payment_status = 'pending'
+        AND d.payment_status = 'pending'
+        GROUP BY d.donation_id
         ORDER BY d.created_at DESC
     `;
 
@@ -535,7 +567,7 @@ router.get('/check-payment-donate', (req, res) => {
 
 
 
-// ดึงรายละเอียดการชำระเงิน
+//ดึงรายละเอียดการชำระเงินบริจาคแต่ละรายการ
 router.get('/check-payment-donate/:id', (req, res) => {
     const donationId = req.params.id;
 
@@ -548,15 +580,15 @@ router.get('/check-payment-donate/:id', (req, res) => {
             d.slip AS proof_image,
             p.full_name AS donor_name,
             dp.project_name,
+            CONCAT('DONATE-', d.donation_id) AS order_number,
             pm.account_name,
             pm.bank_name,
             pm.account_number,
-            pm.promptpay_number,
-            CONCAT('DONATE-', d.donation_id) AS order_number
+            pm.promptpay_number
         FROM donations d
         LEFT JOIN donationproject dp ON d.project_id = dp.project_id
-        LEFT JOIN payment_methods pm ON dp.payment_method_id = pm.payment_method_id
         LEFT JOIN profiles p ON d.user_id = p.user_id
+        LEFT JOIN payment_methods pm ON pm.is_official = 1 
         WHERE d.donation_id = ?
     `;
 
@@ -579,6 +611,7 @@ router.get('/check-payment-donate/:id', (req, res) => {
 router.put('/check-payment-donate/approve/:donationId', (req, res) => {
     const donationId = req.params.donationId;
     const userId = req.body.user_id;
+    const ipAddress = req.ip;
 
     const getDonationSql = `
         SELECT amount, project_id, user_id 
@@ -624,7 +657,14 @@ router.put('/check-payment-donate/approve/:donationId', (req, res) => {
                 }
 
                 // log การอนุมัติ
-                logDonation(donationId, userId, "แอดมินยืนยันการชำระเงิน");
+                SystemlogAction(
+                    userId,
+                    'Donation', // moduleName
+                    'APPROVE',  // actionType
+                    `แอดมินยืนยันการชำระเงิน: ${donationId} (จำนวน: ${donation.amount})`, // description
+                    ipAddress,
+                    donationId // relatedId
+                );
 
                 // ส่งแจ้งเตือนให้ผู้บริจาค
                 const insertNotificationSql = `
@@ -661,6 +701,7 @@ router.put('/check-payment-donate/reject/:donationId', (req, res) => {
     const { donationId } = req.params;
     const { reject_reason, admin_id } = req.body;
 
+    const ipAddress = req.ip;
     // อัปเดตสถานะโครงการ
     const sql = `
         UPDATE donations
@@ -689,18 +730,20 @@ router.put('/check-payment-donate/reject/:donationId', (req, res) => {
             const userId = rows[0].user_id;
 
             // log การปฏิเสธ
-            logDonation(admin_id, donationId, "แอดมินปฏิเสธการชำระเงิน");
+            SystemlogAction(
+                admin_id,
+                'Donation', // moduleName
+                'APPROVE',  // actionType
+                `แอดมินปฏิเสธการชำระเงิน: ${donationId}`, // description
+                ipAddress,
+                donationId // relatedId
+            );
 
             const message = 'การบริจาคโดนปฏิเสธ กรุณาอัปโหลดสลิปใหม่';
             const insertNotificationSql = `
-                INSERT INTO notifications (user_id, type, message, related_id, send_date)
-                VALUES (?, 'reject-donate', ?, ?, NOW())
-                ON DUPLICATE KEY UPDATE 
-                    message = VALUES(message),
-                    send_date = NOW(),
-                    status = 'ยังไม่อ่าน';
+                INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
+                VALUES (?, 'reject-donate', ?, ?, NOW(), 'ยังไม่อ่าน')
             `;
-
             db.query(insertNotificationSql, [userId, message, donationId], (err3) => {
                 if (err3) {
                     console.error('Failed to insert notification:', err3);
@@ -709,6 +752,7 @@ router.put('/check-payment-donate/reject/:donationId', (req, res) => {
 
                 res.json({ success: true, message: 'Payment rejected successfully', updatedStatus: 'failed' });
             });
+
         });
     });
 });
@@ -734,69 +778,6 @@ router.put('/:id', (req, res) => {
         }
 
         res.status(200).json({ message: 'Project status updated successfully' });
-    });
-});
-
-
-// เพิ่มสินค้าที่ระลึก
-router.post('/addsouvenir', upload.single('image'), (req, res) => {
-    const { productName, description, price, paymentMethod, bankName, accountNumber, accountName, promptpayNumber } = req.body;
-    const user_id = req.session.user?.id;
-    const image = req.file ? req.file.filename : null;
-
-    if (!image) {
-        return res.status(400).json({ error: 'Image is required' });
-    }
-
-    if (!productName || !description || !price || !paymentMethod || !bankName || !accountNumber || !accountName) {
-        return res.status(400).json({ error: 'All fields are required' });
-    }
-
-    const queryPayment = `
-    INSERT INTO payment_methods 
-    (method_name, bank_name, account_name, account_number, promptpay_number) 
-    VALUES (?, ?, ?, ?, ?)
-    `;
-
-    const valuesPayment = [
-        paymentMethod,
-        bankName,
-        accountName,
-        accountNumber,
-        promptpayNumber
-    ];
-
-    db.query(queryPayment, valuesPayment, (err, result) => {
-        if (err) {
-            console.error('Error inserting payment method:', err);
-            return res.status(500).json({ error: 'Error inserting payment method' });
-        }
-
-        const payment_method_id = result.insertId;
-
-        const queryProduct = `
-        INSERT INTO products 
-        (product_name, description, image, price, user_id, status, payment_method_id) 
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        `;
-
-        const valuesProduct = [
-            productName,
-            description,
-            image,
-            price,
-            user_id,
-            "1",
-            payment_method_id,
-        ];
-
-        db.query(queryProduct, valuesProduct, (err, result) => {
-            if (err) {
-                console.error('Error inserting product:', err);
-                return res.status(500).json({ error: 'Error inserting product' });
-            }
-            res.status(200).json({ message: 'Product and payment method added successfully' });
-        });
     });
 });
 
@@ -850,183 +831,6 @@ router.put('/updateSouvenir/:id', (req, res) => {
         res.status(200).json({ message: 'Product status updated successfully' });
     });
 });
-
-// การอนุมัติสินค้า
-// router.put('/approveSouvenir/:productId', (req, res) => {
-//     const productId = req.params.productId;
-//     const approverId = req.body.approver_id;
-//     const action = req.body.action || 'approved';
-
-//     if (!productId || !approverId) {
-//         return res.status(400).json({ error: 'Product ID and Approver ID are required' });
-//     }
-
-//     const getProductQuery = 'SELECT product_name, user_id FROM products WHERE product_id = ?';
-//     db.query(getProductQuery, [productId], (err, productResult) => {
-//         if (err) return res.status(500).json({ error: 'Database error (product)' });
-//         if (productResult.length === 0) return res.status(404).json({ error: 'Product not found' });
-
-//         const { product_name: productName, user_id: ownerId } = productResult[0];
-
-//         const getApproverQuery = `
-//             SELECT profiles.full_name, role.role_name 
-//             FROM users
-//             JOIN profiles ON users.user_id = profiles.user_id
-//             JOIN role ON users.role_id = role.role_id
-//             WHERE users.user_id = ?
-//         `;
-//         db.query(getApproverQuery, [approverId], (err, approverResult) => {
-//             if (err) return res.status(500).json({ error: 'Database error (approver)' });
-//             if (approverResult.length === 0) return res.status(404).json({ error: 'Approver not found' });
-
-//             const approverName = approverResult[0].full_name;
-//             const approverRole = approverResult[0].role_name;
-
-//             // Step 1: Log ก่อน
-//             const insertLog = `
-//                 INSERT INTO product_approval_log (product_id, approver_id, approver_name, approver_role, action)
-//                 VALUES (?, ?, ?, ?, ?)
-//             `;
-//             db.query(insertLog, [productId, approverId, approverName, approverRole, action], (err) => {
-//                 if (err) return res.status(500).json({ error: 'Error logging approval' });
-
-//                 // Step 2: แจ้งเตือนเจ้าของ
-//                 const message = action === 'approved'
-//                     ? `สินค้าของคุณ "${productName}" ได้รับการอนุมัติแล้ว!`
-//                     : `สินค้าของคุณ "${productName}" ถูกปฏิเสธและจะไม่ถูกแสดงบนเว็บไซต์`;
-
-//                 const notifyQuery = `
-//                     INSERT INTO notifications (user_id, type, message, related_id, send_date, status) 
-//                     VALUES (?, 'approve', ?, ?, NOW(), 'ยังไม่อ่าน')
-//                     ON DUPLICATE KEY UPDATE 
-//                         message = VALUES(message),
-//                         send_date = NOW(),
-//                         status = 'ยังไม่อ่าน';
-//                     `;
-//                 db.query(notifyQuery, [ownerId, message, productId], (err) => {
-//                     if (err) return res.status(500).json({ error: 'Error sending notification' });
-
-//                     // Step 3: อัปเดตหรือ ลบจริง
-//                     if (action === 'approved') {
-//                         db.query('UPDATE products SET status = ? WHERE product_id = ?', ['1', productId], (err) => {
-//                             if (err) return res.status(500).json({ error: 'Error updating product status' });
-//                             return res.status(200).json({ message: 'Product approved and logged' });
-//                         });
-//                     } else if (action === 'rejected') {
-//                         db.query('DELETE FROM products WHERE product_id = ?', [productId], (err) => {
-//                             if (err) return res.status(500).json({ error: 'Error deleting rejected product' });
-//                             return res.status(200).json({ message: 'Product rejected, logged, and deleted' });
-//                         });
-//                     } else {
-//                         return res.status(400).json({ error: 'Invalid action type' });
-//                     }
-//                 });
-//             });
-//         });
-//     });
-// });
-
-// การอนุมัติสินค้า
-router.put('/approveSouvenir/:productId', (req, res) => {
-    const productId = req.params.productId;
-    const approverId = req.body.approver_id;
-    const action = req.body.action || 'approved';
-
-    if (!productId || !approverId) {
-        return res.status(400).json({ error: 'Product ID and Approver ID are required' });
-    }
-
-    const getProductQuery = 'SELECT product_name, user_id FROM products WHERE product_id = ?';
-    db.query(getProductQuery, [productId], (err, productResult) => {
-        if (err) return res.status(500).json({ error: 'Database error (product)' });
-        if (productResult.length === 0) return res.status(404).json({ error: 'Product not found' });
-
-        const { product_name: productName, user_id: ownerId } = productResult[0];
-
-        const getApproverQuery = `
-            SELECT profiles.full_name, role.role_name 
-            FROM users
-            JOIN profiles ON users.user_id = profiles.user_id
-            JOIN role ON users.role_id = role.role_id
-            WHERE users.user_id = ?
-        `;
-        db.query(getApproverQuery, [approverId], (err, approverResult) => {
-            if (err) return res.status(500).json({ error: 'Database error (approver)' });
-            if (approverResult.length === 0) return res.status(404).json({ error: 'Approver not found' });
-
-            const approverName = approverResult[0].full_name;
-            const approverRole = approverResult[0].role_name;
-
-            // บันทึก Log
-            const insertLog = `
-                INSERT INTO product_approval_log (product_id, approver_id, approver_name, approver_role, action)
-                VALUES (?, ?, ?, ?, ?)
-            `;
-            db.query(insertLog, [productId, approverId, approverName, approverRole, action], (err) => {
-                if (err) return res.status(500).json({ error: 'Error logging approval' });
-
-                // แจ้งเตือนเจ้าของ
-                const message = action === 'approved'
-                    ? `สินค้าของคุณ "${productName}" ได้รับการอนุมัติแล้ว!`
-                    : `สินค้าของคุณ "${productName}" ถูกปฏิเสธและจะไม่ถูกแสดงบนเว็บไซต์`;
-
-                const notifyQuery = `
-                    INSERT INTO notifications (user_id, type, message, related_id, send_date, status) 
-                    VALUES (?, 'approve', ?, ?, NOW(), 'ยังไม่อ่าน')
-                    ON DUPLICATE KEY UPDATE 
-                        message = VALUES(message),
-                        send_date = NOW(),
-                        status = 'ยังไม่อ่าน';
-                `;
-                db.query(notifyQuery, [ownerId, message, productId], (err) => {
-                    if (err) return res.status(500).json({ error: 'Error sending notification' });
-
-                    // ถ้าอนุมัติ
-                    if (action === 'approved') {
-                        db.query('UPDATE products SET status = ? WHERE product_id = ?', ['1', productId], (err) => {
-                            if (err) return res.status(500).json({ error: 'Error updating product status' });
-
-                            // ตรวจสอบว่า product_slot ถึงวันเปิดขายหรือยัง
-                            const checkSlotQuery = `
-                                SELECT * FROM product_slots 
-                                WHERE product_id = ? AND start_date <= NOW()
-                            `;
-                            db.query(checkSlotQuery, [productId], (err, slotResult) => {
-                                if (err) return res.status(500).json({ error: 'Error checking product slot' });
-
-                                if (slotResult.length > 0) {
-                                    // ถ้าถึงวันเปิดขายแล้ว -> เปลี่ยนสถานะเป็น active
-                                    const updateSlotQuery = `
-                                        UPDATE product_slots 
-                                        SET status = 'active' 
-                                        WHERE product_id = ? AND start_date <= NOW()
-                                    `;
-                                    db.query(updateSlotQuery, [productId], (err) => {
-                                        if (err) return res.status(500).json({ error: 'Error updating slot status' });
-                                        return res.status(200).json({ message: 'Product approved and slot activated' });
-                                    });
-                                } else {
-                                    // ยังไม่ถึงวันเปิดขาย
-                                    return res.status(200).json({ message: 'Product approved but slot not active yet' });
-                                }
-                            });
-                        });
-                    }
-                    else if (action === 'rejected') {
-                        db.query('DELETE FROM products WHERE product_id = ?', [productId], (err) => {
-                            if (err) return res.status(500).json({ error: 'Error deleting rejected product' });
-                            return res.status(200).json({ message: 'Product rejected, logged, and deleted' });
-                        });
-                    }
-                    else {
-                        return res.status(400).json({ error: 'Invalid action type' });
-                    }
-                });
-            });
-        });
-    });
-});
-
 
 // แก้ไขข้อมูลสินค้า
 router.put('/editSouvenir/:id', (req, res) => {
@@ -1319,6 +1123,7 @@ router.get('/users/:userId', (req, res) => {
             users.role_id,  
             role.role_name,
             users.is_active,
+            profiles.profiles_id,
             profiles.full_name, 
             profiles.email, 
             profiles.phone, 
@@ -1335,7 +1140,7 @@ router.get('/users/:userId', (req, res) => {
         FROM users 
         LEFT JOIN profiles ON users.user_id = profiles.user_id
         LEFT JOIN role ON users.role_id = role.role_id
-        LEFT JOIN educations ON users.user_id = educations.user_id
+        LEFT JOIN educations ON profiles.profiles_id = educations.profiles_id
         LEFT JOIN degree ON educations.degree_id = degree.degree_id
         LEFT JOIN major ON educations.major_id = major.major_id
         WHERE users.user_id = ? 
@@ -1425,39 +1230,120 @@ router.get('/users/:userId', (req, res) => {
 });
 
 // แก้ไขโปรไฟล์ผู้ใช้
-router.put('/edit-profile-users/:userId', (req, res) => {
+// router.put('/edit-profile-users/:userId', (req, res) => {
+//     const userId = req.params.userId;
+//     const { email, phone, address, educations } = req.body;
+
+//     const queryUpdateProfile = `UPDATE profiles SET email = ?, phone = ?, address = ? WHERE user_id = ?`;
+//     db.query(queryUpdateProfile, [email, phone, address, userId], (err) => {
+//         if (err) {
+//             console.error("Profile update error:", err);
+//             return res.status(500).json({ success: false, message: "อัปเดตโปรไฟล์ล้มเหลว" });
+//         }
+
+//         const deleteEducations = `DELETE FROM educations WHERE user_id = ?`;
+//         db.query(deleteEducations, [userId], (err) => {
+//             if (err) {
+//                 console.error("Education delete error:", err);
+//                 return res.status(500).json({ success: false, message: "ลบข้อมูลการศึกษาล้มเหลว" });
+//             }
+
+//             if (educations && educations.length > 0) {
+//                 const filtered = educations.filter(e =>
+//                     e.degree_id && e.major_id && e.studentId && e.graduation_year
+//                 );
+
+//                 if (filtered.length === 0) {
+//                     return res.status(400).json({ success: false, message: "ข้อมูลการศึกษาไม่ครบถ้วน" });
+//                 }
+
+//                 const insertEduSql = `
+//                     INSERT INTO educations (user_id, degree_id, major_id, studentId, graduation_year, entry_year)
+//                     VALUES ?
+//                 `;
+//                 const values = filtered.map(e => [
+//                     userId,
+//                     e.degree_id,
+//                     e.major_id,
+//                     e.studentId,
+//                     e.graduation_year,
+//                     e.entry_year,
+//                 ]);
+
+//                 db.query(insertEduSql, [values], (err, result) => {
+//                     if (err) {
+//                         console.error("Education insert error:", err);
+//                         return res.status(500).json({ success: false, message: "เพิ่มข้อมูลการศึกษาล้มเหลว" });
+//                     }
+
+//                     SystemlogAction(
+//             parseInt(userId),
+//             'Profile', // moduleName
+//             'UPDATE',  // actionType
+//             `User profile (ID: ${userId}) updated by self or admin.`, // description
+//             ipAddress,
+//             null // relatedId (ใช้ null เพราะเป็นการอัปเดตโปรไฟล์ตัวเอง)
+//         );
+//                     return res.json({ success: true, message: "อัปเดตข้อมูลสำเร็จ" });
+//                 });
+
+//             } else {
+//                 logManage(userId, 'แก้ไขโปรไฟล์ผู้ใช้ (ไม่มีข้อมูลการศึกษา)');
+//                 return res.json({ success: true, message: "อัปเดตข้อมูลสำเร็จ (ไม่มีข้อมูลการศึกษาใหม่)" });
+//             }
+//         });
+//     });
+// });
+
+
+// แก้ไขโปรไฟล์ผู้ใช้
+router.put('/edit-profile-users/:userId', async (req, res) => {
+    // 1. ตรวจสอบและดึงข้อมูลที่จำเป็น
     const userId = req.params.userId;
+    const ipAddress = req.ip; // ดึง IP Address สำหรับ Log
     const { email, phone, address, educations } = req.body;
+    let profileId = null;
 
-    const queryUpdateProfile = `UPDATE profiles SET email = ?, phone = ?, address = ? WHERE user_id = ?`;
-    db.query(queryUpdateProfile, [email, phone, address, userId], (err) => {
-        if (err) {
-            console.error("Profile update error:", err);
-            return res.status(500).json({ success: false, message: "อัปเดตโปรไฟล์ล้มเหลว" });
+    try {
+        // --- A. ดึง profiles_id ก่อน ---
+        const [profile] = await db.promise().query(
+            'SELECT profile_id FROM profiles WHERE user_id = ?',
+            [userId]
+        );
+
+        if (profile.length === 0) {
+            return res.status(404).json({ success: false, message: 'ไม่พบข้อมูลโปรไฟล์' });
         }
+        profileId = profile[0].profile_id;
 
-        const deleteEducations = `DELETE FROM educations WHERE user_id = ?`;
-        db.query(deleteEducations, [userId], (err) => {
-            if (err) {
-                console.error("Education delete error:", err);
-                return res.status(500).json({ success: false, message: "ลบข้อมูลการศึกษาล้มเหลว" });
-            }
+        // --- B. อัปเดตข้อมูลโปรไฟล์หลัก ---
+        const queryUpdateProfile = `UPDATE profiles SET email = ?, phone = ?, address = ? WHERE user_id = ?`;
+        await db.promise().query(queryUpdateProfile, [email, phone, address, userId]);
 
-            if (educations && educations.length > 0) {
-                const filtered = educations.filter(e =>
-                    e.degree_id && e.major_id && e.studentId && e.graduation_year
-                );
+        // --- C. ลบข้อมูลการศึกษาเดิม (ใช้ profiles_id เป็น FK) ---
+        const deleteEducations = `DELETE FROM educations WHERE profiles_id = ?`;
+        await db.promise().query(deleteEducations, [profileId]);
 
-                if (filtered.length === 0) {
-                    return res.status(400).json({ success: false, message: "ข้อมูลการศึกษาไม่ครบถ้วน" });
-                }
+        // --- D. เพิ่มข้อมูลการศึกษาใหม่ (ถ้ามี) ---
+        if (educations && educations.length > 0) {
+            // กรองข้อมูลที่จำเป็นต้องมี
+            const educationData = educations.map(e => ({
+                degree_id: e.degree_id || null,
+                major_id: e.major_id || null,
+                studentId: e.studentId || null,
+                graduation_year: e.graduation_year || null,
+                entry_year: e.entry_year || null,
+            })).filter(e =>
+                e.degree_id && e.major_id && e.studentId && e.graduation_year
+            );
 
+            if (educationData.length > 0) {
                 const insertEduSql = `
-                    INSERT INTO educations (user_id, degree_id, major_id, studentId, graduation_year, entry_year)
+                    INSERT INTO educations (profiles_id, degree_id, major_id, studentId, graduation_year, entry_year)
                     VALUES ?
                 `;
-                const values = filtered.map(e => [
-                    userId,
+                const values = educationData.map(e => [
+                    profileId, // <--- ใช้ profiles_id
                     e.degree_id,
                     e.major_id,
                     e.studentId,
@@ -1465,98 +1351,107 @@ router.put('/edit-profile-users/:userId', (req, res) => {
                     e.entry_year,
                 ]);
 
-                db.query(insertEduSql, [values], (err, result) => {
-                    if (err) {
-                        console.error("Education insert error:", err);
-                        return res.status(500).json({ success: false, message: "เพิ่มข้อมูลการศึกษาล้มเหลว" });
-                    }
-
-                    logManage(userId, 'แก้ไขโปรไฟล์ผู้ใช้');
-                    return res.json({ success: true, message: "อัปเดตข้อมูลสำเร็จ" });
-                });
-
-            } else {
-                logManage(userId, 'แก้ไขโปรไฟล์ผู้ใช้ (ไม่มีข้อมูลการศึกษา)');
-                return res.json({ success: true, message: "อัปเดตข้อมูลสำเร็จ (ไม่มีข้อมูลการศึกษาใหม่)" });
+                await db.promise().query(insertEduSql, [values]);
             }
-        });
-    });
-});
+        }
 
-// เพิ่มผู้ใช้
-router.post("/add-user", upload.single("image_path"), (req, res) => {
-    const { full_name, email, phone, username, password, role } = req.body;
-    const education = req.body.education ? JSON.parse(req.body.education) : [];
-    const image_path = req.file ? `uploads/${req.file.filename}` : 'uploads/default-profile.png';
-    // insert users
-    const addUsers = `INSERT INTO users (role_id) VALUES (?);`;
+        // บันทึก System Log 
+        SystemlogAction(
+            parseInt(userId),
+            'Profile', // moduleName
+            'UPDATE',  // actionType
+            `แก้ไขโปรไฟล์`,
+            ipAddress,
+            null // relatedId (ใช้ null เพราะเป็นการอัปเดตโปรไฟล์ตัวเอง)
+        );
 
-    db.query(addUsers, [role], (err, userResult) => {
-        if (err) return res.status(500).json({ message: "Error inserting user" });
+        return res.json({ success: true, message: "อัปเดตข้อมูลสำเร็จ" });
 
-        const userId = userResult.insertId;
-
-        const queryLogin = `INSERT INTO login (user_id, username, password) VALUES (?, ?, ?)`;
-        db.query(queryLogin, [userId, username, password], (err) => {
-            if (err) return res.status(500).json({ message: "Error inserting login" });
-
-            const queryProfile = `
-                INSERT INTO profiles (user_id, full_name, email, phone, image_path)
-                VALUES (?, ?, ?, ?, ?)
-            `;
-            db.query(queryProfile, [userId, full_name, email, phone, image_path], (err) => {
-                if (err) return res.status(500).json({ message: "Error inserting profile" });
-
-                if (education.length > 0) {
-                    const queryEdu = `
-                        INSERT INTO educations (user_id, degree_id, major_id, studentId, graduation_year, entry_year)
-                        VALUES ?
-                    `;
-                    const values = education.map((edu) => [
-                        userId,
-                        edu.degree || null,
-                        edu.major || null,
-                        edu.studentId || null,
-                        edu.graduation_year || null,
-                        edu.entry_year || null,
-                    ]);
-
-                    db.query(queryEdu, [values], (err) => {
-                        if (err) return res.status(500).json({ message: "Error inserting education" });
-
-                        return res.json({ success: true, message: "User created successfully" });
-                    });
-                } else {
-                    return res.json({ success: true, message: "User created successfully" });
-                }
-            });
-        });
-    });
+    } catch (error) {
+        console.error("Error during profile update:", error);
+        return res.status(500).json({ success: false, message: "เกิดข้อผิดพลาดในการอัปเดตข้อมูล" });
+    }
 });
 
 
 // เปลี่ยนบทบาทผู้ใช้
-router.put('/:userId/role', (req, res) => {
-    const { userId } = req.params;
+// router.put('/:userId/role', (req, res) => {
+//     const { userId } = req.params;
+//     const { role } = req.body;
+
+//     const query = "UPDATE users SET role_id = ? WHERE user_id = ?";
+//     db.query(query, [role, userId], (err, results) => {
+//         if (err) {
+//             console.error("Error updating role:", err);
+//             return res.status(500).send("Error updating role");
+//         }
+
+//         // console.log("Role updated successfully for user ID:", userId);
+//         logManage(userId, 'เปลี่ยนบทบาทผู้ใช้');
+
+//         res.send("เปลี่ยนบทบาทผู้ใช้สำเร็จ");
+//     });
+// });
+
+
+// เปลี่ยนบทบาทผู้ใช้
+router.put('/:userId/role', async (req, res) => {
+    const userId = parseInt(req.params.userId); // ผู้ใช้ที่ถูกเปลี่ยนบทบาท
+    const actorId = req.session.user?.id ? parseInt(req.session.user.id) : 0; // ผู้กระทำ (Admin), ใช้ 0 ถ้าหาไม่เจอ
+    const ipAddress = req.ip;
     const { role } = req.body;
 
-    const query = "UPDATE users SET role_id = ? WHERE user_id = ?";
-    db.query(query, [role, userId], (err, results) => {
-        if (err) {
-            console.error("Error updating role:", err);
-            return res.status(500).send("Error updating role");
+    try {
+        const query = "UPDATE users SET role_id = ? WHERE user_id = ?";
+
+        // ใช้ db.promise().query
+        const [results] = await db.promise().query(query, [role, userId]);
+
+        if (results.affectedRows === 0) {
+            // บันทึก Log เมื่อไม่พบผู้ใช้
+            SystemlogAction(
+                actorId,
+                'User',
+                'UPDATE_FAIL',
+                `Failed to update role for target ID: ${userId}. User not found.`,
+                ipAddress,
+                userId
+            );
+            return res.status(404).json({ success: false, message: "ไม่พบผู้ใช้ที่ต้องการเปลี่ยนบทบาท" });
         }
 
-        // console.log("Role updated successfully for user ID:", userId);
-        logManage(userId, 'เปลี่ยนบทบาทผู้ใช้');
+        // บันทึก System Log
+        SystemlogAction(
+            actorId, // ID ของผู้กระทำ (Admin)
+            'User', // moduleName
+            'UPDATE',  // actionType
+            `User role updated to ${role} for target ID: ${userId}.`, // description
+            ipAddress,
+            userId // relatedId
+        );
 
-        res.send("เปลี่ยนบทบาทผู้ใช้สำเร็จ");
-    });
+        res.json({ success: true, message: "เปลี่ยนบทบาทผู้ใช้สำเร็จ" });
+
+    } catch (error) {
+        console.error("Error updating role:", error);
+
+        // บันทึก Log เมื่อเกิดข้อผิดพลาด
+        SystemlogAction(
+            actorId,
+            'User',
+            'ERROR',
+            `Database error updating role for User ID ${userId}: ${error.message}`,
+            ipAddress,
+            userId
+        );
+        return res.status(500).json({ success: false, message: "เกิดข้อผิดพลาดในการเปลี่ยนบทบาทผู้ใช้" });
+    }
 });
 
 // ลบผู้ใช้ (Soft Delete)
 router.delete("/delete-user/:userId", (req, res) => {
     const { userId } = req.params;
+    const ipAddress = req.ip;
 
     const query = "UPDATE users SET deleted_at = NOW() WHERE user_id = ?";
     db.query(query, [userId], (err, results) => {
@@ -1570,8 +1465,15 @@ router.delete("/delete-user/:userId", (req, res) => {
             return res.status(404).send("ไม่พบผู้ใช้ที่ต้องการลบ");
         }
 
-        //บันทึก log
-        logManage(userId, 'ลบผู้ใช้');
+        // บันทึก System Log
+        SystemlogAction(
+            userId, // ID ของผู้กระทำ (Admin)
+            'User', // moduleName
+            'DELETE',  // actionType
+            `ลบผู้ใช้: ${userId}.`, // description
+            ipAddress,
+            userId // relatedId
+        );
 
         res.send("ลบผู้ใช้สำเร็จ");
     });
@@ -1582,6 +1484,7 @@ router.delete("/delete-user/:userId", (req, res) => {
 router.put("/:userId/status", (req, res) => {
     const { userId } = req.params;
     const { is_active } = req.body;
+    const ipAddress = req.ip;
 
     const query = "UPDATE users SET is_active = ? WHERE user_id = ?";
     db.query(query, [is_active, userId], (err, results) => {
@@ -1590,7 +1493,15 @@ router.put("/:userId/status", (req, res) => {
             return res.status(500).send("Error updating status");
         }
 
-        logManage(userId, 'เปลี่ยนสถานะผู้ใช้');
+        // บันทึก System Log
+        SystemlogAction(
+            userId, // ID ของผู้กระทำ (Admin)
+            'User', // moduleName
+            'UPDATE',  // actionType
+            `เปลี่ยนสถานะผู้ใช้: ${userId}.`, // description
+            ipAddress,
+            userId // relatedId
+        );
         res.send("User status updated successfully");
     });
 });
@@ -1790,23 +1701,23 @@ router.get('/dashboard-stats', (req, res) => {
 });
 
 // ดึงจำนวนการแจ้งเตือน
-router.get('/notification-counts', (req, res) => {
-    const query1 = `SELECT COUNT(*) AS count FROM donationproject WHERE status = 0`;
-    const query2 = `SELECT COUNT(*) AS count FROM products WHERE status = "0"`;
+// router.get('/notification-counts', (req, res) => {
+//     const query1 = `SELECT COUNT(*) AS count FROM donationproject WHERE status = 0`;
+//     const query2 = `SELECT COUNT(*) AS count FROM products WHERE status = "0"`;
 
-    db.query(query1, (err, result1) => {
-        if (err) return res.status(500).json({ error: 'Query error 1' });
+//     db.query(query1, (err, result1) => {
+//         if (err) return res.status(500).json({ error: 'Query error 1' });
 
-        db.query(query2, (err, result2) => {
-            if (err) return res.status(500).json({ error: 'Query error 2' });
+//         db.query(query2, (err, result2) => {
+//             if (err) return res.status(500).json({ error: 'Query error 2' });
 
-            res.json({
-                donationRequests: result1[0].count,
-                souvenirRequests: result2[0].count
-            });
-        });
-    });
-});
+//             res.json({
+//                 donationRequests: result1[0].count,
+//                 souvenirRequests: result2[0].count
+//             });
+//         });
+//     });
+// });
 
 // ดึงระดับการศึกษา
 router.get("/degrees", (req, res) => {
@@ -1839,6 +1750,7 @@ router.get("/order-issue", (req, res) => {
         i.resolution_options,
         o.order_status, 
         o.total_amount,
+        o.user_id,
         u.full_name AS buyer_name,
         ua.shippingAddress,
         ua.province_name,
@@ -1849,13 +1761,12 @@ router.get("/order-issue", (req, res) => {
         GROUP_CONCAT(p.product_name SEPARATOR ', ') AS product_names
     FROM order_issues i
     JOIN orders o ON i.order_id = o.order_id
-    JOIN profiles u ON i.user_id = u.user_id
+    JOIN profiles u ON o.user_id = u.user_id
     JOIN user_addresses ua ON ua.user_id = u.user_id AND ua.is_default = 1
     JOIN order_detail oi ON oi.order_id = o.order_id
     JOIN products p ON p.product_id = oi.product_id
     WHERE 
         o.order_status IN ('issue_reported', 'return_pending', 'return_approved')
-        AND p.is_official = 1
     GROUP BY 
         i.issue_id, i.order_id, i.issue_type, i.description, i.evidence_path, i.contacted, 
         i.created_at, i.resolution_options, o.order_status, o.total_amount, 
@@ -1909,7 +1820,13 @@ router.put("/update-issue-status/:issueId", (req, res) => {
         resolution_note = JSON.stringify(resolution_note);
     }
 
-    const selectQuery = `SELECT order_id, user_id FROM order_issues WHERE issue_id = ?`;
+    const selectQuery = `
+    SELECT i.order_id, o.user_id
+    FROM order_issues i
+    JOIN orders o ON i.order_id = o.order_id
+    WHERE i.issue_id = ?
+`;
+
     db.query(selectQuery, [issueId], (err, rows) => {
         if (err || !rows.length) {
             return res.status(404).json({ error: "ไม่พบปัญหานี้" });
@@ -1920,7 +1837,7 @@ router.put("/update-issue-status/:issueId", (req, res) => {
         // อัปเดต order_issues
         const updateIssueQuery = `
             UPDATE order_issues 
-            SET admin_status = ?, resolution_type = ?, resolution_note = ?, refund_date = ?, updated_at = NOW()
+            SET admin_status = ?, resolution_type = ?, resolution_note = ?, refund_date = NOW(), updated_at = NOW()
             WHERE issue_id = ?
         `;
         db.query(updateIssueQuery, [admin_status, resolution_type, resolution_note, refundDate, issueId], (err) => {
@@ -2144,7 +2061,7 @@ router.put("/approve-return/:returnId", (req, res) => {
                             const message = "สินค้าได้ส่งคืนสำเร็จ การคืนเงินจะดำเนินการเร็วๆ นี้";
                             db.query(
                                 `INSERT INTO notifications (user_id, type, message, related_id, send_date, status) 
-                            VALUES (?, 'return_update', ?, ?, NOW(), 'unread')`,
+                            VALUES (?, 'return_update', ?, ?, NOW(), 'ยังไม่อ่าน')`,
                                 [user_id, message, returnId],
                                 (err) => {
                                     if (err) return res.status(500).json({ success: false, error: err.message });
@@ -2186,7 +2103,7 @@ router.put("/resend/:orderId", (req, res) => {
             const notifyMsg = `สินค้าของคุณถูกส่งใหม่แล้ว กรุณาติดตามสถานะTracking: ${tracking_number}`;
 
             db.query(
-                "INSERT INTO notifications (user_id, type, message, related_id, send_date, status) VALUES (?, 'resend', ?, ?, NOW(), 'unread')",
+                "INSERT INTO notifications (user_id, type, message, related_id, send_date, status) VALUES (?, 'resend', ?, ?, NOW(), 'ยังไม่อ่าน')",
                 [userId, notifyMsg, orderId],
                 (err) => {
                     if (err) return res.status(500).json({ success: false, error: err.message });
@@ -2219,10 +2136,11 @@ router.put("/cancel-manage/:orderId", (req, res) => {
     const { action, userId } = req.body; // action = "approve" หรือ "reject"
 
     let newStatus, messageToUser;
+
     if (action === "approve") {
         newStatus = "repeal_approved";
 
-        // คืนสินค้า
+        // คืนสินค้า (ปรับ stock)
         db.query("SELECT product_id, quantity FROM order_detail WHERE order_id = ?", [orderId], (err, products) => {
             if (err) return console.error(err);
             products.forEach(p => {
@@ -2233,29 +2151,32 @@ router.put("/cancel-manage/:orderId", (req, res) => {
                 );
             });
         });
-    }
-    else if (action === "reject") {
-        newStatus = "repeal_rejected";
-        messageToUser = `คำขอยกเลิกคำสั่งซื้อ #${orderId} ของคุณถูกปฏิเสธ`;
+
+        messageToUser = `คำขอยกเลิกคำสั่งซื้อ #${orderId} ของคุณได้รับการอนุมัติ`;
+
+    } else if (action === "reject") {
+        // เปลี่ยนกลับไปสถานะเดิมเพื่อจัดส่งตามปกติ
+        newStatus = "processing";
+        messageToUser = `คำขอยกเลิกคำสั่งซื้อ #${orderId} ของคุณถูกปฏิเสธ ระบบจะจัดส่งตามปกติ`;
     } else {
         return res.status(400).json({ message: "action ไม่ถูกต้อง" });
     }
 
     // อัปเดตสถานะ order
     const updateOrderQuery = `
-    UPDATE orders 
-    SET order_status = ?, update_at = NOW()
-    WHERE order_id = ?
-  `;
+        UPDATE orders 
+        SET order_status = ?, update_at = NOW()
+        WHERE order_id = ?
+    `;
 
     db.query(updateOrderQuery, [newStatus, orderId], (err) => {
         if (err) return res.status(500).json({ message: "อัปเดตสถานะไม่สำเร็จ" });
 
         // แจ้งเตือนผู้ใช้
         const insertNotifyQuery = `
-      INSERT INTO notifications (user_id, message, type, created_at, is_read)
-      VALUES (?, ?, 'order_cancel_status', NOW(), 0)
-    `;
+            INSERT INTO notifications (user_id, message, type, created_at, status)
+            VALUES (?, ?, 'order_cancel_status', NOW(), 'ยังไม่อ่าน')
+        `;
 
         db.query(insertNotifyQuery, [userId, messageToUser], (err2) => {
             if (err2) console.error("แจ้งเตือนไม่สำเร็จ:", err2);
@@ -2269,6 +2190,57 @@ router.put("/cancel-manage/:orderId", (req, res) => {
     });
 });
 
+//การคืนเงินของการยกเลิกสินค้า
+router.put("/refund/:orderId", (req, res) => {
+    const { orderId } = req.params;
+    const { refundAmount, refundNote, refundDate } = req.body;
+
+    if (!refundAmount || refundAmount <= 0) {
+        return res.status(400).json({ error: "จำนวนเงินคืนไม่ถูกต้อง" });
+    }
+
+    // ดึงข้อมูล user_id ของ order
+    db.query("SELECT user_id FROM orders WHERE order_id = ?", [orderId], (err, rows) => {
+        if (err || !rows.length) return res.status(404).json({ error: "ไม่พบคำสั่งซื้อ" });
+
+        const userId = rows[0].user_id;
+
+        // อัปเดตคำสั่งซื้อ + คืนเงิน
+        const updateQuery = `
+            UPDATE orders
+            SET order_status = 'refund_approved',
+                refund_amount = ?,
+                refund_note = ?,
+                refund_date = ?,
+                update_at = NOW()
+            WHERE order_id = ?
+        `;
+
+        db.query(updateQuery, [refundAmount, refundNote, refundDate || new Date(), orderId], (err) => {
+            if (err) return res.status(500).json({ error: "บันทึกการคืนเงินไม่สำเร็จ" });
+
+            // แจ้งเตือนผู้ใช้
+            const message = `คำสั่งซื้อที่คุณยกเลิกได้รับการคืนเงินจำนวน ${refundAmount} บาท`;
+            const notifyQuery = `
+                INSERT INTO notifications (user_id, type, message, related_id, send_date, status)
+                VALUES (?, 'refund', ?, ?, NOW(), 'ยังไม่อ่าน')
+            `;
+
+            db.query(notifyQuery, [userId, message, orderId], (err) => {
+                if (err) console.error("แจ้งเตือนผู้ใช้ไม่สำเร็จ:", err);
+
+                res.json({
+                    success: true,
+                    message: "คืนเงินสำเร็จ",
+                    order_status: "refund_approved",
+                    refund_amount: refundAmount,
+                    refund_note: refundNote,
+                    refund_date: refundDate || new Date()
+                });
+            });
+        });
+    });
+});
 
 
 

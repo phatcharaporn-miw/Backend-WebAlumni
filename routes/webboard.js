@@ -4,7 +4,7 @@ var db = require('../db');
 var multer = require('multer');
 var path = require('path');
 var { LoggedIn, checkActiveUser } = require('../middlewares/auth');
-const { logWebboard } = require('../logUserAction');
+const { SystemlogAction } = require('../logUserAction');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -23,6 +23,7 @@ const bannedWords = ["ควย", "คำหยาบ"];
 router.post('/create-post', upload.single("image"), (req, res) => {
   const { title, category_id, content, startDate } = req.body;
   const userId = req.session.user?.id;
+  const ipAddress = req.ip;
 
   // ตรวจสอบคำต้องห้าม
   const regex = new RegExp(bannedWords.join("|"), "i"); // ใช้ RegExp เพื่อตรวจสอบคำต้องห้ามไม่สนใจตัวพิมพ์เล็ก-ใหญ่
@@ -46,7 +47,14 @@ router.post('/create-post', upload.single("image"), (req, res) => {
     }
 
     const webboardId = results.insertId;
-    logWebboard(userId, webboardId, 'สร้างกระทู้');
+    SystemlogAction(
+      userId,
+      'Webboard', // moduleName
+      'CREATE',   // actionType
+      `สร้างกระทู้: ${title}`, // description
+      ipAddress,
+      webboardId // relatedId
+    );
 
     console.log("กระทู้ถูกสร้างสำเร็จ, webboard_id:", webboardId);
     res.status(200).json({ success: true, message: "กระทู้ถูกสร้างเรียบร้อย", webboard_id: results.insertId });
@@ -223,6 +231,7 @@ router.get('/webboard/:id', (req, res) => {
 router.delete('/webboard/:id', (req, res) => {
   const postId = req.params.id;
   const userId = req.session.user?.id;
+  const ipAddress = req.ip;
 
   if (!userId) {
     return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
@@ -257,7 +266,14 @@ router.delete('/webboard/:id', (req, res) => {
       }
 
       // บันทึก log หลังลบสำเร็จ
-      logWebboard(userId, postId, 'ลบกระทู้');
+      SystemlogAction(
+        userId,
+        'Webboard', // moduleName
+        'DELETE',   // actionType
+        `ลบกระทู้`, // description
+        ipAddress,
+        postId // relatedId
+      );
 
       res.status(200).json({ success: true, message: 'ลบกระทู้เรียบร้อยแล้ว' });
     });
@@ -300,6 +316,7 @@ router.get('/webboard/recommended-posts', (req, res) => {
 router.post('/webboard/:id/comment', LoggedIn, checkActiveUser, (req, res) => {
   const postId = req.params.id;
   const { comment_detail } = req.body;
+  const ipAddress = req.ip;
 
   if (!req.session || !req.session.user || !req.session.user.id) {
     return res.status(401).json({ success: false, message: 'กรุณาเข้าสู่ระบบ' });
@@ -373,7 +390,14 @@ router.post('/webboard/:id/comment', LoggedIn, checkActiveUser, (req, res) => {
             return res.status(500).json({ success: false, message: 'Database error' });
           }
 
-          logWebboard(userId, postId, 'แสดงความคิดเห็น');
+          SystemlogAction(
+            userId,
+            'Webboard', // moduleName
+            'CREATE',   // actionType
+            `แสดงความคิดเห็น`, // description
+            ipAddress,
+            postId // relatedId
+          );
 
           res.status(200).json({ success: true, comment: commentResults[0] });
         });
@@ -387,6 +411,7 @@ router.post('/webboard/:webboardId/comment/:commentId/reply', LoggedIn, checkAct
   const { commentId } = req.params;
   const { reply_detail } = req.body;
   const userId = req.session.user.id;
+  const ipAddress = req.ip;
 
   if (!reply_detail.trim()) {
     return res.status(400).json({ success: false, message: 'กรุณากรอกข้อความตอบกลับ' });
@@ -430,8 +455,15 @@ router.post('/webboard/:webboardId/comment/:commentId/reply', LoggedIn, checkAct
       }
 
       // บันทึก log การตอบกลับ
-      logWebboard(userId, commentId, 'ตอบกลับความคิดเห็น');
-      
+      SystemlogAction(
+        userId,
+        'Webboard', // moduleName
+        'CREATE',   // actionType
+        `ตอบกลับความคิดเห็น`, // description
+        ipAddress,
+        commentId // relatedId
+      );
+
       return res.status(200).json(replyResults[0]);
     });
   });
@@ -441,6 +473,7 @@ router.post('/webboard/:webboardId/comment/:commentId/reply', LoggedIn, checkAct
 router.delete('/webboard/:webboardId/comment/:commentId', LoggedIn, checkActiveUser, (req, res) => {
   const { commentId } = req.params;
   const userId = req.session.user?.id;
+  const ipAddress = req.ip;
 
   const queryDeleteComment = 'DELETE FROM comment WHERE comment_id = ?';
   db.query(queryDeleteComment, [commentId, userId], (err, result) => {
@@ -453,8 +486,14 @@ router.delete('/webboard/:webboardId/comment/:commentId', LoggedIn, checkActiveU
       return res.status(404).json({ success: false, message: 'ไม่พบความคิดเห็นนี้' });
     }
 
-    logWebboard(userId, commentId, 'ลบความคิดเห็น');
-
+    SystemlogAction(
+      userId,
+      'Webboard', // moduleName
+      'DELETE',   // actionType
+      `ลบความคิดเห็น`, // description
+      ipAddress,
+      commentId // relatedId
+    );
     res.json({ success: true, message: 'ลบสำเร็จ' });
   });
 });
@@ -463,6 +502,7 @@ router.delete('/webboard/:webboardId/comment/:commentId', LoggedIn, checkActiveU
 router.delete('/webboard/:webboardId/comment/:commentId/reply/:replyId', LoggedIn, checkActiveUser, (req, res) => {
   const { commentId, replyId } = req.params;
   const userId = req.session.user?.id;
+  const ipAddress = req.ip;
 
 
   // ดึง webboard_id จาก commentId
@@ -495,8 +535,14 @@ router.delete('/webboard/:webboardId/comment/:commentId/reply/:replyId', LoggedI
         return res.status(404).json({ success: false, message: 'ไม่พบการตอบกลับนี้' });
       }
 
-      // บันทึก log 
-      logWebboard(userId, webboardId, 'ลบการตอบกลับ comment');
+      SystemlogAction(
+        userId,
+        'Webboard', // moduleName
+        'DELETE',   // actionType
+        `ลบการตอบกลับ comment`, // description
+        ipAddress,
+        commentId // relatedId
+      );
 
       res.json({ success: true, message: 'ลบการตอบกลับเรียบร้อยแล้ว' });
     });
@@ -504,111 +550,10 @@ router.delete('/webboard/:webboardId/comment/:commentId/reply/:replyId', LoggedI
 });
 
 
-//กดใจกระทู้ และแจ้งเตือน
-// router.post('/webboard/:postId/favorite', LoggedIn, checkActiveUser, (req, res) => {
-//   const { postId } = req.params;
-//   const userId = req.session.user?.id;
-
-//   // ดึง full_name ของผู้ที่กดไลก์จากฐานข้อมูล
-//   const queryGetUser = `
-//       SELECT p.full_name, l.username, r.role_name 
-//       FROM profiles p
-//       JOIN users u ON u.user_id = p.user_id
-//       JOIN role r ON u.role_id = r.role_id
-//       LEFT JOIN login l ON l.user_id = u.user_id 
-//       WHERE p.user_id = ?
-//     `;
-
-//   db.query(queryGetUser, [userId], (err, userResults) => {
-//     if (err) {
-//       console.error('Error fetching user full_name:', err);
-//       return res.status(500).json({ success: false, message: 'Database error' });
-//     }
-
-//     if (userResults.length === 0) {
-//       return res.status(404).json({ success: false, message: 'ไม่พบผู้ใช้' });
-//     }
-
-//     const userRole = userResults[0].role;  // role ของผู้ใช้
-//     let likedBy;
-
-//     // ดึง user_id ของเจ้าของกระทู้
-//     const queryGetPostOwner = `SELECT user_id FROM webboard WHERE webboard_id = ?`;
-
-//     db.query(queryGetPostOwner, [postId], (err, postResults) => {
-//       if (err) {
-//         console.error('Error fetching post owner:', err);
-//         return res.status(500).json({ success: false, message: 'Database error' });
-//       }
-
-//       if (postResults.length === 0) {
-//         return res.status(404).json({ success: false, message: 'ไม่พบกระทู้' });
-//       }
-
-//       const postOwnerId = postResults[0].user_id;
-
-//       // ตรวจสอบว่าผู้ใช้กดไลก์โพสต์นี้แล้วหรือยัง
-//       const queryCheck = `SELECT status FROM favorite WHERE user_id = ? AND webboard_id = ?`;
-
-//       db.query(queryCheck, [userId, postId], (err, results) => {
-//         if (err) {
-//           console.error('Error checking favorite:', err);
-//           return res.status(500).json({ success: false, message: 'Database error' });
-//         }
-
-//         if (results.length > 0) {
-//           const currentStatus = results[0].status;
-//           const newStatus = currentStatus === 1 ? 0 : 1;
-
-//           const queryUpdate = `UPDATE favorite SET status = ?, updated_at = NOW() WHERE user_id = ? AND webboard_id = ?`;
-//           db.query(queryUpdate, [newStatus, userId, postId], (err) => {
-//             if (err) {
-//               console.error('Error updating favorite:', err);
-//               return res.status(500).json({ success: false, message: 'Database error' });
-//             }
-
-//             res.json({ success: true, message: newStatus === 1 ? 'เพิ่มลงในรายการถูกใจ' : 'ลบออกจากรายการถูกใจ', status: newStatus });
-//           });
-//         } else {
-//           const queryInsert = `INSERT INTO favorite (user_id, webboard_id, liked_by, status, created_at, updated_at) VALUES (?, ?, ?, 1, NOW(), NOW())`;
-
-//           db.query(queryInsert, [userId, postId, likedBy], (err) => {
-//             if (err) {
-//               console.error('Error inserting favorite:', err);
-//               return res.status(500).json({ success: false, message: 'Database error' });
-//             }
-
-//             // เพิ่มการแจ้งเตือน
-//             const queryNotification = `
-//                             INSERT INTO notifications (user_id, type, message, related_id, status, send_date)
-//                             VALUES (?, 'like', ?, ?, 'ยังไม่อ่าน', NOW())
-//                             ON DUPLICATE KEY UPDATE 
-//                             message = VALUES(message),
-//                             send_date = NOW(),
-//                             status = 'ยังไม่อ่าน';
-//                         `;
-//             const message = `${likedBy} ถูกใจโพสต์ของคุณ`;
-
-//             db.query(queryNotification, [postOwnerId, message, postId], (err) => {
-//               if (err) {
-//                 console.error('Error creating notification:', err);
-//                 return res.status(500).json({ success: false, message: 'Database error' });
-//               }
-
-//               logWebboard(userId, postId, 'กดถูกใจกระทู้');
-              
-//               res.json({ success: true, message: 'เพิ่มลงในรายการถูกใจและสร้างการแจ้งเตือนสำเร็จ', status: 1 });
-//             });
-//           });
-//         }
-//       });
-//     });
-//   });
-// });
-
 router.post('/webboard/:postId/favorite', LoggedIn, checkActiveUser, (req, res) => {
   const { postId } = req.params;
   const userId = req.session.user?.id;
+  const ipAddress = req.ip;
 
   // ดึง full_name ของผู้ที่กดไลก์จากฐานข้อมูล
   const queryGetUser = `
@@ -630,7 +575,7 @@ router.post('/webboard/:postId/favorite', LoggedIn, checkActiveUser, (req, res) 
       return res.status(404).json({ success: false, message: 'ไม่พบผู้ใช้' });
     }
 
-    const likedBy = userResults[0].full_name; 
+    const likedBy = userResults[0].full_name;
     const userRole = userResults[0].role_name;
 
     // ดึง user_id ของเจ้าของกระทู้
@@ -699,7 +644,15 @@ router.post('/webboard/:postId/favorite', LoggedIn, checkActiveUser, (req, res) 
                 return res.status(500).json({ success: false, message: 'Database error' });
               }
 
-              logWebboard(userId, postId, 'กดถูกใจกระทู้');
+
+              SystemlogAction(
+                userId,
+                'Webboard', // moduleName
+                'FAVORITE',   // actionType
+                `กดถูกใจกระทู้`, // description
+                ipAddress,
+                postId // relatedId
+              );
               res.json({ success: true, message: 'เพิ่มลงในรายการถูกใจและสร้างการแจ้งเตือนสำเร็จ', status: 1 });
             });
           });

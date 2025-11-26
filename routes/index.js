@@ -3,174 +3,109 @@ var router = express.Router();
 var db = require('../db');
 const bcrypt = require('bcryptjs');
 const nodemailer = require('nodemailer');
-const { logUserAction } = require('../logUserAction');
+const { SystemlogAction } = require('../logUserAction');
+
 
 router.post('/login', (req, res) => {
-  console.log("Login request body:", req.body);
-  const { username, password } = req.body;
+    console.log("Login request body:", req.body);
+    const { username, password } = req.body;
+    const ipAddress = req.ip;
 
-  if (!username || !password) {
-    return res.status(400).json({ success: false, message: 'กรุณากรอก username และ password' });
-  }
-
-  const query = `
-    SELECT login.*, role.role_id, profiles.image_path, users.is_active
-    FROM login
-    JOIN users ON login.user_id = users.user_id
-    JOIN role ON users.role_id = role.role_id
-    JOIN profiles ON users.user_id = profiles.user_id
-    WHERE login.username = ?
-  `;
-
-  db.query(query, [username], (err, results) => {
-    if (err) {
-      console.error('Database error:', err);
-      return res.status(500).json({ success: false, message: 'Database error' });
+    if (!username || !password) {
+        return res.status(400).json({ success: false, message: 'กรุณากรอก username และ password' });
     }
 
-    if (results.length === 0) {
-      return res.status(401).json({ success: false, message: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" });
-    }
+    const query = `
+        SELECT login.*, role.role_id, profiles.image_path, users.is_active
+        FROM login
+        JOIN users ON login.user_id = users.user_id
+        JOIN role ON users.role_id = role.role_id
+        JOIN profiles ON users.user_id = profiles.user_id
+        WHERE login.username = ?
+    `;
 
-    const user = results[0];
+    db.query(query, [username], (err, results) => {
+        if (err) {
+            console.error('Database error:', err);
+            SystemlogAction(0, 'Auth', 'ERROR', `Database error during login attempt for username: ${username}. Error: ${err.message}`, ipAddress, null);
+            return res.status(500).json({ success: false, message: 'Database error' });
+        }
 
-    if (!user.password) {
-      return res.status(500).json({ success: false, message: 'Password hash is missing in database' });
-    }
+        if (results.length === 0) {
+            SystemlogAction(0, 'Auth', 'AUTH_FAIL', `Login failed: Username '${username}' not found.`, ipAddress, null);
+            return res.status(401).json({ success: false, message: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" });
+        }
 
-    bcrypt.compare(password, user.password, (err, match) => {
-      if (err) {
-        console.error('Error comparing passwords:', err);
-        return res.status(500).json({ success: false, message: 'Error comparing password' });
-      }
+        const user = results[0];
+        const userId = user.user_id;
 
-      if (!match) {
-        return res.status(401).json({ success: false, message: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" });
-      }
+        if (!user.password) {
+            console.error(`Password hash is missing for user ID: ${userId}`);
+            SystemlogAction(userId, 'Auth', 'ERROR', `Login failed: Password hash is missing in database.`, ipAddress, null);
+            return res.status(500).json({ success: false, message: 'Password hash is missing in database' });
+        }
 
-      if (parseInt(user.is_active) === 0) {
-        return res.status(403).json({ success: false, message: "บัญชีของคุณถูกระงับการใช้งาน" });
-      }
+        bcrypt.compare(password, user.password, (err, match) => {
+            if (err) {
+                console.error('Error comparing passwords:', err);
+                SystemlogAction(userId, 'Auth', 'ERROR', `Technical error comparing password for user ID ${userId}. Error: ${err.message}`, ipAddress, null);
+                return res.status(500).json({ success: false, message: 'Error comparing password' });
+            }
 
-      // บันทึก session
-      req.session.user = {
-        id: user.user_id,
-        username: user.username,
-        role: user.role_id,
-        is_active: user.is_active,  
-        image_path: user.image_path  
-      };
+            if (!match) {
+                SystemlogAction(userId, 'Auth', 'AUTH_FAIL', `Login failed: Incorrect password for user ID ${userId}.`, ipAddress, null);
+                return res.status(401).json({ success: false, message: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" });
+            }
 
-      console.log("Session after login:", req.session.user);
+            if (parseInt(user.is_active) === 0) {
+                SystemlogAction(userId, 'Auth', 'AUTH_FAIL', `Login failed: Account suspended for user ID ${userId}`, ipAddress, null);
+                return res.status(403).json({ success: false, message: "บัญชีของคุณถูกระงับการใช้งาน" });
+            }
 
-      // บังคับเปลี่ยนรหัสครั้งแรกเฉพาะ alumni (role=3) ที่ถูกสร้างโดย admin
-      const firstLogin = parseInt(user.role_id) === 3 && user.is_first_login === 1;
+            req.session.user = {
+                id: userId,  
+                username: user.username,
+                role: user.role_id,
+                is_active: user.is_active,  
+                image_path: user.image_path  
+            };
 
-      res.json({
-        success: true,
-        message: 'เข้าสู่ระบบสำเร็จ!',
-        userId: user.user_id,
-        role: user.role_id,
-        username: user.username,
-        image_path: user.image_path,
-        firstLogin
-      });
+            console.log("Session data before save:", req.session.user);
+            
+            req.session.save((saveErr) => {
+                if (saveErr) {
+                    console.error("Session save error:", saveErr);
+                    return res.status(500).json({ 
+                        success: false, 
+                        message: 'Session save error' 
+                    });
+                }
+
+                // บันทึก System Log
+                // SystemlogAction(
+                //     userId, 
+                //     'Auth',
+                //     'LOGIN',
+                //     `User logged in successfully (Role: ${user.role_id}).`,
+                //     ipAddress,
+                //     null
+                // );
+
+                const firstLogin = parseInt(user.role_id) === 3 && user.is_first_login === 1;
+
+                res.json({
+                    success: true,
+                    message: 'เข้าสู่ระบบสำเร็จ!',
+                    userId: userId,
+                    role: user.role_id,
+                    username: user.username,
+                    image_path: user.image_path,
+                    firstLogin
+                });
+            });
+        });
     });
-  });
 });
-
-// router.post('/login', (req, res) => {
-//   console.log("Login request body:", req.body);
-//   const { username, password } = req.body;
-
-//   if (!username || !password) {
-//     return res.status(400).json({ success: false, message: 'กรุณากรอก username และ password' });
-//   }
-
-//   const query = `
-//     SELECT login.*, role.role_id, profiles.image_path, users.is_active
-//     FROM login
-//     JOIN users ON login.user_id = users.user_id
-//     JOIN role ON users.role_id = role.role_id
-//     JOIN profiles ON users.user_id = profiles.user_id
-//     WHERE login.username = ?
-//   `;
-
-//   db.query(query, [username], (err, results) => {
-//     if (err) {
-//       console.error('Database error:', err);
-//       return res.status(500).json({ success: false, message: 'Database error' });
-//     }
-
-//     if (results.length === 0) {
-//       return res.status(401).json({ success: false, message: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" });
-//     }
-
-//     const user = results[0];
-
-//     //ตรวจสอบว่าถ้าเป็น first login และรหัสผ่านตรงกับค่า default
-//     const defaultPassword = "alumnicollegeofcomputing";
-//     const isDefaultPassword = password === defaultPassword && user.is_first_login === 1;
-
-//     if (isDefaultPassword) {
-//       req.session.user = {
-//         id: user.user_id,
-//         username: user.username,
-//         role: user.role_id,
-//         is_active: user.is_active,
-//         image_path: user.image_path
-//       };
-
-//       return res.json({
-//         success: true,
-//         message: "เข้าสู่ระบบครั้งแรก โปรดเปลี่ยนรหัสผ่านใหม่",
-//         userId: user.user_id,
-//         role: user.role_id,
-//         username: user.username,
-//         image_path: user.image_path,
-//         firstLogin: true
-//       });
-//     }
-
-//     // ตรวจสอบรหัสผ่านจริงจาก bcrypt
-//     bcrypt.compare(password, user.password, (err, match) => {
-//       if (err) {
-//         console.error('Error comparing passwords:', err);
-//         return res.status(500).json({ success: false, message: 'Error comparing password' });
-//       }
-
-//       if (!match) {
-//         return res.status(401).json({ success: false, message: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" });
-//       }
-
-//       if (parseInt(user.is_active) === 0) {
-//         return res.status(403).json({ success: false, message: "บัญชีของคุณถูกระงับการใช้งาน" });
-//       }
-
-//       req.session.user = {
-//         id: user.user_id,
-//         username: user.username,
-//         role: user.role_id,
-//         is_active: user.is_active,
-//         image_path: user.image_path
-//       };
-
-//       const firstLogin = parseInt(user.role_id) === 3 && user.is_first_login === 1;
-
-//       res.json({
-//         success: true,
-//         message: 'เข้าสู่ระบบสำเร็จ!',
-//         userId: user.user_id,
-//         role: user.role_id,
-//         username: user.username,
-//         image_path: user.image_path,
-//         firstLogin
-//       });
-//     });
-//   });
-// });
-
-// Logout Route
 
 router.post('/logout', (req, res) => {
   // ลบ session ทั้งหมดเพื่อออกจากระบบ
@@ -329,7 +264,7 @@ router.post("/reset-password", (req, res) => {
 
 
 // ตรวจสอบชื่อ-นามสกุล
-router.post('/check-fullName', (req, res) => {
+router.post('/check-fullname', (req, res) => {
   const { full_name } = req.body;
   if (!full_name) return res.status(400).json({ message: 'กรุณาระบุชื่อ-นามสกุล' });
 
@@ -338,15 +273,21 @@ router.post('/check-fullName', (req, res) => {
 
   // ค้นหาโดยใช้ LIKE เพื่อรองรับการค้นหาแบบบางส่วน
   const query = `
-    SELECT e.studentId, e.graduation_year, 
-           p.full_name, d.degree_name, m.major_name
+    SELECT 
+      e.studentId, 
+      e.graduation_year, 
+      p.full_name, 
+      d.degree_name, 
+      m.major_name
     FROM educations e
-    JOIN profiles p ON e.user_id = p.user_id
+    JOIN profiles p ON e.profiles_id = p.user_id
     JOIN degree d ON e.degree_id = d.degree_id
     JOIN major m ON e.major_id = m.major_id
     WHERE p.full_name LIKE ?
   `;
   const param = `%${cleanedFullName}%`;
+  console.log("Param for LIKE:", param);
+
 
   db.query(query, [param], (err, results) => {
     if (err) {
@@ -505,6 +446,7 @@ router.get("/alumni-all", (req, res) => {
             u.role_id,
             r.role_name,
             u.is_active,
+            p.profiles_id,
             p.full_name,
             p.email,
             p.phone,
@@ -521,7 +463,7 @@ router.get("/alumni-all", (req, res) => {
         FROM users u
         LEFT JOIN profiles p ON u.user_id = p.user_id
         LEFT JOIN role r ON u.role_id = r.role_id
-        LEFT JOIN educations e ON u.user_id = e.user_id
+        LEFT JOIN educations e ON p.profiles_id = e.profiles_id
         LEFT JOIN degree d ON e.degree_id = d.degree_id
         LEFT JOIN major m ON e.major_id = m.major_id
         WHERE u.role_id = 3
@@ -534,12 +476,13 @@ router.get("/alumni-all", (req, res) => {
             return res.status(500).json({ success: false, message: "Database error" });
         }
 
-        // รวมการศึกษาของแต่ละ alumni เป็น array
+        // รวมข้อมูลการศึกษา
         const alumniMap = {};
         result.forEach(row => {
             if (!alumniMap[row.user_id]) {
                 alumniMap[row.user_id] = {
                     user_id: row.user_id,
+                    profiles_id: row.profiles_id,
                     role_id: row.role_id,
                     role_name: row.role_name,
                     is_active: row.is_active,
@@ -551,6 +494,7 @@ router.get("/alumni-all", (req, res) => {
                     educations: []
                 };
             }
+
             if (row.education_id) {
                 alumniMap[row.user_id].educations.push({
                     education_id: row.education_id,
@@ -568,6 +512,7 @@ router.get("/alumni-all", (req, res) => {
         res.json({ success: true, data: Object.values(alumniMap) });
     });
 });
+
 
 
 module.exports = router;
