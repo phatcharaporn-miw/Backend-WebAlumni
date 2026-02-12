@@ -288,7 +288,6 @@ router.post('/check-fullname', (req, res) => {
   const param = `%${cleanedFullName}%`;
   console.log("Param for LIKE:", param);
 
-
   db.query(query, [param], (err, results) => {
     if (err) {
       console.error('เกิดข้อผิดพลาดในการตรวจสอบชื่อ-นามสกุล:', err);

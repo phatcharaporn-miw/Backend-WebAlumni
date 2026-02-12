@@ -92,7 +92,6 @@ app.use('/api', indexRouter);
 app.use('/users', usersRouter);
 app.use('/add', registerRouter);
 app.use('/donate', DonateRoute);
-// app.use('/admin', AdminRoute);
 app.use('/souvenir',SouvenirRoute);
 app.use('/web', webboardRouter);
 app.use('/notice', notificationRoute);
